@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
 
@@ -22,6 +24,9 @@ const (
 	// ProviderVersion constrains the provider versions that rendered code
 	// works with.
 	ProviderVersion = ">= 0.80, < 1.0"
+	// providerName is the local name of the provider, which its resource
+	// types start with.
+	providerName = "proxmox"
 )
 
 // languageVersion constrains the OpenTofu version: rendered code uses the
@@ -53,17 +58,50 @@ func (c *compiler) addUnit(dir, cluster string) {
 }
 
 // addUnitFiles creates versions.tf and providers.tf in every unit that
-// holds managed blocks but lacks them. Files that exist stay as they are,
-// whatever they contain.
+// holds managed blocks but lacks them. A unit gets no versions.tf if one of
+// its files declares the provider in required_providers already, and no
+// providers.tf if one has a provider block for it, since OpenTofu rejects
+// both twice. Files that exist stay as they are, whatever they contain.
 func (c *compiler) addUnitFiles() {
 	for _, dir := range slices.Sorted(maps.Keys(c.units)) {
-		if p := path.Join(dir, versionsFile); !c.exists(p) {
+		required, configured := c.declared(dir)
+		if p := path.Join(dir, versionsFile); !c.exists(p) && !required {
 			c.files[p] = versions()
 		}
-		if p := path.Join(dir, providersFile); !c.exists(p) {
+		if p := path.Join(dir, providersFile); !c.exists(p) && !configured {
 			c.addProviders(p, slices.Sorted(maps.Keys(c.units[dir])))
 		}
 	}
+}
+
+// declared reports whether a .tf file of the unit in dir declares the
+// provider in the required_providers block of a terraform block, and
+// whether one has a provider block for it. Only the files right in dir
+// count: those further down belong to modules.
+func (c *compiler) declared(dir string) (required, configured bool) {
+	for p, src := range c.files {
+		if path.Dir(p) != dir {
+			continue
+		}
+		// Every file parsed when it was read, and compiling keeps it so.
+		file, diags := hclsyntax.ParseConfig(src, p, hcl.InitialPos)
+		if diags.HasErrors() {
+			continue
+		}
+		for _, b := range file.Body.(*hclsyntax.Body).Blocks {
+			switch {
+			case b.Type == "provider" && len(b.Labels) == 1 && b.Labels[0] == providerName:
+				configured = true
+			case b.Type == "terraform":
+				for _, inner := range b.Body.Blocks {
+					if _, ok := inner.Body.Attributes[providerName]; ok && inner.Type == "required_providers" {
+						required = true
+					}
+				}
+			}
+		}
+	}
+	return required, configured
 }
 
 // addProviders creates providers.tf at p for a unit that holds VMs of the

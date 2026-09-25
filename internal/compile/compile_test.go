@@ -306,6 +306,56 @@ func TestUnitFiles(t *testing.T) {
 	})
 }
 
+// TestUnitFilesDeclaredElsewhere checks that a unit gets no versions.tf or
+// providers.tf if another of its files, whatever its name, declares or
+// configures the provider already, and that nothing else counts.
+func TestUnitFilesDeclaredElsewhere(t *testing.T) {
+	const requiredProviders = "terraform {\n  required_providers {\n    proxmox = {\n      source = \"bpg/proxmox\"\n    }\n  }\n}\n"
+	t.Run("provider block", func(t *testing.T) {
+		root := copyExample(t)
+		removeFile(t, root, providersPath)
+		writeFile(t, root, "terraform/pve-main-compute/main.tf", "provider \"proxmox\" {\n  endpoint = \"https://10.0.10.12:8006/\"\n}\n")
+		files, diags := Compile(load(t, root))
+		checkDiags(t, diags)
+		checkFiles(t, files, nil)
+	})
+
+	t.Run("required_providers", func(t *testing.T) {
+		root := copyExample(t)
+		removeFile(t, root, versionsPath)
+		writeFile(t, root, "terraform/pve-main-compute/terraform.tf", requiredProviders)
+		files, diags := Compile(load(t, root))
+		checkDiags(t, diags)
+		checkFiles(t, files, nil)
+	})
+
+	t.Run("other code", func(t *testing.T) {
+		root := copyExample(t)
+		removeFile(t, root, versionsPath)
+		removeFile(t, root, providersPath)
+		// A comment and another provider do not count, and neither does a
+		// module of the unit.
+		writeFile(t, root, "terraform/pve-main-compute/other.tf", `# provider "proxmox" is in providers.tf.
+terraform {
+  required_providers {
+    random = {
+      source = "hashicorp/random"
+    }
+  }
+}
+
+provider "random" {}
+`)
+		writeFile(t, root, "terraform/pve-main-compute/modules/vm/main.tf", requiredProviders+"\nprovider \"proxmox\" {}\n")
+		files, diags := Compile(load(t, root))
+		checkDiags(t, diags)
+		checkFiles(t, files, map[string]string{
+			versionsPath:  readFile(t, example, versionsPath),
+			providersPath: readFile(t, example, providersPath),
+		})
+	})
+}
+
 func TestExistingUnitFilesStay(t *testing.T) {
 	root := copyExample(t)
 	edit(t, root, versionsPath, `">= 0.80, < 1.0"`, `"~> 0.85"`)

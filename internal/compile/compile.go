@@ -41,9 +41,10 @@ import (
 // has the address of a VM. A VM without a managed block gets a new one at
 // the end of terraform/<cluster>-compute/vms.tf, unless that unit has a
 // resource with the VM's address already. Every unit directory with managed
-// blocks gets versions.tf and providers.tf if it lacks them; files that
-// exist are never overwritten. A managed block whose VM is not in intent
-// stays and gets a warning.
+// blocks gets versions.tf if none of its files declares the provider in
+// required_providers, and providers.tf if none has a provider "proxmox"
+// block; files that exist are never overwritten. A managed block whose VM
+// is not in intent stays and gets a warning.
 //
 // A VM that cannot be written, because it is not admitted or because
 // intent would remove code that nodr does not own, gets an error and is
