@@ -2,8 +2,9 @@
 
 GO      ?= go
 BIN_DIR := bin
+MODULE  := $(shell $(GO) list -m)
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X github.com/centopw/nodr/internal/buildinfo.Version=$(VERSION)
+LDFLAGS := -s -w -X $(MODULE)/internal/buildinfo.Version=$(VERSION)
 
 .DEFAULT_GOAL := help
 
