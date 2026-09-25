@@ -157,10 +157,11 @@ func (a *app) planUnits(ctx context.Context, only []string, planDir string) ([]u
 		u := unitPlan{
 			dir: dir,
 			runner: &opentofu.Runner{
-				Binary: bin,
-				Dir:    filepath.Join(l.ws.Root, filepath.FromSlash(dir)),
-				Stdout: a.stderr,
-				Stderr: a.stderr,
+				Binary:     bin,
+				Dir:        filepath.Join(l.ws.Root, filepath.FromSlash(dir)),
+				Stdout:     a.stderr,
+				Stderr:     a.stderr,
+				Interrupts: a.interrupts,
 			},
 			// Units are right below terraform/, so their names differ.
 			file: filepath.Join(planDir, path.Base(dir)+".tfplan"),

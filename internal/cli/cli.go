@@ -36,9 +36,11 @@ func (e usageError) Unwrap() error { return e.err }
 
 // Run executes the nodr command line with args, and returns the exit code.
 // Commands that ask for confirmation read the answer from stdin, and ask
-// only if stdin is a terminal.
-func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	a := &app{stdin: stdin, stdout: stdout, stderr: stderr, interactive: isTerminal(stdin)}
+// only if stdin is a terminal. The first interrupt cancels ctx, and
+// interrupts, which may be nil, delivers the later ones, which reach
+// OpenTofu (see opentofu.Runner.Interrupts).
+func Run(ctx context.Context, interrupts <-chan struct{}, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	a := &app{stdin: stdin, stdout: stdout, stderr: stderr, interactive: isTerminal(stdin), interrupts: interrupts}
 	return a.run(ctx, args)
 }
 
@@ -74,7 +76,10 @@ type app struct {
 	stdout, stderr io.Writer
 	// interactive reports whether stdin is a terminal, where a person can
 	// answer questions.
-	interactive  bool
+	interactive bool
+	// interrupts delivers the interrupts after the first, which cancels
+	// the context.
+	interrupts   <-chan struct{}
 	workspaceDir string
 }
 

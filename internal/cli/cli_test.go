@@ -27,7 +27,7 @@ func run(args ...string) result {
 // runWithStdin runs the command line with stdin as its standard input.
 func runWithStdin(stdin io.Reader, args ...string) result {
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), args, stdin, &stdout, &stderr)
+	code := Run(context.Background(), nil, args, stdin, &stdout, &stderr)
 	return result{stdout: stdout.String(), stderr: stderr.String(), code: code}
 }
 

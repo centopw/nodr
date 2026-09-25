@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -231,6 +232,105 @@ while :; do sleep 1; done
 	var cmdErr *CommandError
 	if !errors.As(err, &cmdErr) || cmdErr.Stderr != "Interrupt received." {
 		t.Errorf("Init error = %v, want the fake tofu to stop after an interrupt", err)
+	}
+}
+
+// stopper is a fake tofu that prints "ready", runs until it gets an
+// interrupt, and then stops cleanly, which takes $FAKE_TOFU_STOP tenths of
+// a second, unless a second interrupt makes it exit at once. It prints each
+// interrupt that it gets, and how it stopped just before it exits, which it
+// could not do if it were killed.
+const stopper = `interrupts=0
+trap 'interrupts=$((interrupts + 1)); echo "interrupt $interrupts"; if [ $interrupts -ge 2 ]; then echo "stopped at once"; exit 2; fi' INT
+echo ready
+while [ $interrupts -eq 0 ]; do sleep 0.1; done
+i=0
+while [ $i -lt "$FAKE_TOFU_STOP" ]; do
+	sleep 0.1
+	i=$((i + 1))
+done
+echo "stopped cleanly"
+exit 1
+`
+
+// watcher keeps what is written to it, and calls the function for a text
+// once the text appears.
+type watcher struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+	on  map[string]func()
+}
+
+func (w *watcher) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf.Write(p)
+	for text, f := range w.on {
+		if strings.Contains(w.buf.String(), text) {
+			delete(w.on, text)
+			f()
+		}
+	}
+	return len(p), nil
+}
+
+func (w *watcher) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// TestRunnerWaitsForACleanStop checks that OpenTofu gets one interrupt when
+// the context is done, and that the Runner waits until it stops.
+func TestRunnerWaitsForACleanStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stdout := &watcher{on: map[string]func(){"ready": cancel}}
+	var stderr bytes.Buffer
+	r := &Runner{
+		Binary:     fakeTofu(t, stopper),
+		Dir:        t.TempDir(),
+		Env:        []string{"FAKE_TOFU_STOP=10"},
+		Stdout:     stdout,
+		Stderr:     &stderr,
+		Interrupts: make(chan struct{}),
+	}
+	if err := r.Init(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("Init error = %v, want context.Canceled", err)
+	}
+	if want := "ready\ninterrupt 1\nstopped cleanly\n"; stdout.String() != want {
+		t.Errorf("output of the fake tofu =\n%s\nwant\n%s", stdout, want)
+	}
+	if want := interruptNote + "\n"; stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
+// TestRunnerPassesOnASecondInterrupt checks that an interrupt after the one
+// that the context gives reaches OpenTofu, which then exits at once.
+func TestRunnerPassesOnASecondInterrupt(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	interrupts := make(chan struct{}, 1)
+	stdout := &watcher{on: map[string]func(){
+		"ready": cancel,
+		// Once the fake tofu handled the first interrupt, so that the two
+		// are not merged into one.
+		"interrupt 1": func() { interrupts <- struct{}{} },
+	}}
+	r := &Runner{
+		Binary: fakeTofu(t, stopper),
+		Dir:    t.TempDir(),
+		// A clean stop would take a minute.
+		Env:        []string{"FAKE_TOFU_STOP=600"},
+		Stdout:     stdout,
+		Interrupts: interrupts,
+	}
+	if err := r.Init(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("Init error = %v, want context.Canceled", err)
+	}
+	if want := "ready\ninterrupt 1\ninterrupt 2\nstopped at once\n"; stdout.String() != want {
+		t.Errorf("output of the fake tofu =\n%s\nwant\n%s", stdout, want)
 	}
 }
 

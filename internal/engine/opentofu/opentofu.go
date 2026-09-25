@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
 // EnvBinary is the environment variable that selects the OpenTofu binary.
@@ -70,6 +69,12 @@ type Runner struct {
 	// OpenTofu in the middle of an apply would do more harm than losing
 	// its output.
 	Stdout, Stderr io.Writer
+	// Interrupts, if not nil, delivers the interrupts that come after the
+	// one that makes the context of a command done, such as a second
+	// Ctrl-C. Each one is passed on to OpenTofu, which takes a second
+	// interrupt as an order to exit at once, even if that loses state.
+	// When the context is done, Stderr also gets a line that says so.
+	Interrupts <-chan struct{}
 }
 
 // NewRunner returns a Runner for the unit in dir, with the binary that
@@ -161,23 +166,22 @@ func (e *CommandError) Error() string {
 // Unwrap returns the cause.
 func (e *CommandError) Unwrap() error { return e.Err }
 
-// stopTimeout is how long OpenTofu has to stop after an interrupt before it
-// is killed.
-const stopTimeout = time.Minute
+// interruptNote is the line that Stderr gets when the context of a command
+// is done while OpenTofu runs, if the Runner passes on more interrupts.
+const interruptNote = "nodr: waiting for OpenTofu to stop; a second interrupt stops it at once and may lose state"
 
 // run runs tofu with args in the unit. The output on stdout goes to stdout,
 // and the output on stderr to r.Stderr.
+//
+// When ctx is done, OpenTofu gets one interrupt, so it can stop cleanly:
+// finish the operations in progress, save the state and release its lock.
+// run waits for that as long as it takes, and never kills OpenTofu, since
+// that can lose state. The interrupts in r.Interrupts reach OpenTofu too.
 func (r *Runner) run(ctx context.Context, stdout io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, r.Binary, args...)
 	cmd.Dir = r.Dir
 	cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=1")
 	cmd.Env = append(cmd.Env, r.Env...)
-	// When ctx is done, OpenTofu gets an interrupt, so it can stop
-	// gracefully: finish the operations in progress, save the state and
-	// release its lock. It is killed only if it is still running after
-	// stopTimeout.
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-	cmd.WaitDelay = stopTimeout
 	ownProcessGroup(cmd)
 
 	var mu sync.Mutex
@@ -186,7 +190,23 @@ func (r *Runner) run(ctx context.Context, stdout io.Writer, args ...string) erro
 	if stdout != nil {
 		cmd.Stdout = &output{mu: &mu, w: stdout}
 	}
-	err := cmd.Run()
+	// exec calls Cancel once, when ctx is done. cmd.WaitDelay stays zero,
+	// so exec does not kill OpenTofu afterwards.
+	cmd.Cancel = func() error {
+		err := cmd.Process.Signal(os.Interrupt)
+		if r.Interrupts != nil && r.Stderr != nil && !errors.Is(err, os.ErrProcessDone) {
+			mu.Lock()
+			fmt.Fprintln(r.Stderr, interruptNote)
+			mu.Unlock()
+		}
+		return err
+	}
+	err := cmd.Start()
+	if err == nil {
+		stop := r.forwardInterrupts(cmd.Process)
+		err = cmd.Wait()
+		stop()
+	}
 	if err == nil {
 		return nil
 	}
@@ -199,6 +219,32 @@ func (r *Runner) run(ctx context.Context, stdout io.Writer, args ...string) erro
 		Dir:     r.Dir,
 		Stderr:  stderr.tail.String(),
 		Err:     err,
+	}
+}
+
+// forwardInterrupts passes each interrupt in r.Interrupts on to OpenTofu,
+// which runs in p, until the function it returns is called.
+func (r *Runner) forwardInterrupts(p *os.Process) (stop func()) {
+	if r.Interrupts == nil {
+		return func() {}
+	}
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		for {
+			select {
+			case <-done:
+				return
+			case <-r.Interrupts:
+				// This fails if OpenTofu has exited, and on Windows, where
+				// OpenTofu gets the interrupts from the console instead.
+				_ = p.Signal(os.Interrupt)
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
 	}
 }
 

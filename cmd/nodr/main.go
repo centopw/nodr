@@ -13,11 +13,23 @@ import (
 
 func main() {
 	// OpenTofu runs in a process group of its own, so signals for the group
-	// of nodr do not reach it. A termination request is handled like an
-	// interrupt: nodr interrupts OpenTofu and waits for it to stop, rather
-	// than exit at once and leave OpenTofu to die on its next write.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := cli.Run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
-	stop()
-	os.Exit(code)
+	// of nodr do not reach it. The first interrupt or termination request
+	// cancels ctx: nodr interrupts OpenTofu once and waits for it to stop
+	// cleanly, however long that takes. Every later one is passed on to
+	// OpenTofu, which takes a second interrupt as an order to exit at once.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	interrupts := make(chan struct{}, 1)
+	go func() {
+		<-signals
+		cancel()
+		for range signals {
+			select {
+			case interrupts <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	os.Exit(cli.Run(ctx, interrupts, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
