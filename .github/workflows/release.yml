@@ -36,7 +36,11 @@ jobs:
           args: release --clean --release-notes ${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # GitHub stores attestations only for public repositories (and for
+      # private ones on GitHub Enterprise Cloud), so the step is skipped
+      # while the repository is private.
       - uses: actions/attest-build-provenance@v2
+        if: ${{ !github.event.repository.private }}
         with:
           subject-path: |
             dist/*.tar.gz

@@ -7,6 +7,13 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Fixed
+
+- The release workflow no longer fails after publishing when the
+  repository is private. It creates build provenance attestations only
+  for public repositories, because GitHub does not store them for
+  private ones, so the v0.1.0 release has checksums but no attestations.
+
 ## [0.1.0] - 2026-09-25
 
 ### Added

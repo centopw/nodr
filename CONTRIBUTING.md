@@ -96,9 +96,11 @@
    ```
 
 3. The [release workflow](.github/workflows/release.yml) builds `nodr` for
-   Linux, macOS and Windows on amd64 and arm64, adds `checksums.txt` and
-   build provenance attestations, and publishes the GitHub Release with the
-   notes of the version from the changelog. If the changelog has no
+   Linux, macOS and Windows on amd64 and arm64, adds `checksums.txt`, and
+   publishes the GitHub Release with the notes of the version from the
+   changelog. It also adds build provenance attestations when the
+   repository is public; GitHub does not store them for private
+   repositories. If the changelog has no
    section for the version, it fails and publishes nothing. A tag with a
    pre-release suffix, such as `v0.2.0-rc.1`, needs a section of its own
    and publishes a pre-release.
