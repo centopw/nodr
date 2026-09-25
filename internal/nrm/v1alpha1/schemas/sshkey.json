@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SSHKey",
+  "description": "An SSH public key that can be authorized on guests and hosts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nodr/v1alpha1" },
+    "kind": { "const": "SSHKey" },
+    "metadata": { "$ref": "metadata.json" },
+    "spec": { "$ref": "#/$defs/spec" }
+  },
+  "$defs": {
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publicKey"],
+      "properties": {
+        "publicKey": {
+          "type": "string",
+          "description": "The public key in OpenSSH authorized_keys format.",
+          "pattern": "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\\.com|sk-ecdsa-sha2-nistp256@openssh\\.com) [A-Za-z0-9+/]+={0,3}( [^\\r\\n]*)?$",
+          "x-nodr-tier": "basic"
+        },
+        "description": {
+          "type": "string",
+          "description": "Who or what the key belongs to.",
+          "x-nodr-tier": "basic"
+        }
+      }
+    }
+  }
+}

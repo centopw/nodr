@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24.x", "stable"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Verify module cache against go.sum
+        run: go mod verify
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -n 1
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.8.0
+
+  engine-code:
+    name: Validate example code (OpenTofu ${{ matrix.tofu }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest version that rendered code supports, and a current one.
+        tofu: ["1.8.0", "1.11.4"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ matrix.tofu }}
+          tofu_wrapper: false
+      - name: Check formatting
+        run: tofu fmt -check -diff -recursive examples
+      - name: Validate against the provider schema
+        run: |
+          for dir in examples/*/terraform/*/; do
+            echo "::group::$dir"
+            tofu -chdir="$dir" init -backend=false -input=false
+            tofu -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+  dependencies:
+    name: Verify go.sum against the checksum database
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - name: Regenerate go.sum with checksum database lookups
+        run: |
+          rm -f go.sum
+          go mod tidy
+          git diff --exit-code go.mod go.sum

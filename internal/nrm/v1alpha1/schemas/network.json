@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Network",
+  "description": "A layer-2 segment with its subnet, gateway, DHCP, DNS domain, security zone and optional Wi-Fi.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nodr/v1alpha1" },
+    "kind": { "const": "Network" },
+    "metadata": { "$ref": "metadata.json" },
+    "spec": { "$ref": "#/$defs/spec" }
+  },
+  "$defs": {
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vlan": {
+          "type": "integer",
+          "description": "The VLAN ID. Leave empty for an untagged network.",
+          "minimum": 1,
+          "maximum": 4094,
+          "x-nodr-tier": "basic"
+        },
+        "zone": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The security zone used by firewall policies.",
+          "x-nodr-tier": "basic"
+        },
+        "ipv4": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subnet"],
+          "properties": {
+            "subnet": {
+              "$ref": "common.json#/$defs/ipv4Prefix",
+              "description": "The subnet, such as 10.0.30.0/24."
+            },
+            "gateway": {
+              "$ref": "common.json#/$defs/ipv4Address",
+              "description": "The default gateway for hosts on the network."
+            },
+            "dhcp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "range": { "$ref": "common.json#/$defs/ipv4Range" },
+                "leaseTime": { "$ref": "common.json#/$defs/duration" }
+              }
+            },
+            "static": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "range": {
+                  "$ref": "common.json#/$defs/ipv4Range",
+                  "description": "Addresses nodr allocates to resources with automatic addressing."
+                }
+              }
+            }
+          },
+          "x-nodr-tier": "basic"
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "The DNS domain for hosts on the network, such as iot.home.arpa.",
+              "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+            }
+          },
+          "x-nodr-tier": "standard"
+        },
+        "wireless": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ssid", "security"],
+          "properties": {
+            "ssid": { "type": "string", "minLength": 1, "maxLength": 32 },
+            "security": { "type": "string", "enum": ["wpa2", "wpa3", "wpa2-wpa3-mixed"] },
+            "passphraseRef": { "$ref": "common.json#/$defs/secretRef" }
+          },
+          "x-nodr-tier": "standard"
+        },
+        "realizeOn": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "routers": {
+              "$ref": "common.json#/$defs/names",
+              "description": "Routers and access points that carry the network.",
+              "x-nodr-ref": "Router"
+            },
+            "clusters": {
+              "$ref": "common.json#/$defs/names",
+              "description": "Proxmox clusters that carry the network.",
+              "x-nodr-ref": "ProxmoxCluster"
+            }
+          },
+          "x-nodr-tier": "basic"
+        }
+      }
+    }
+  }
+}

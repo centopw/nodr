@@ -30,6 +30,35 @@ reverted or adopted.
 
 ## Status
 
-nodr is in the design phase. The technical design is in
+nodr is at an early stage. The technical design is in
 [`docs/`](docs/README.md), and architecture decisions are recorded in
-[`docs/adr/`](docs/adr/README.md).
+[`docs/adr/`](docs/adr/README.md). Work on the first milestone,
+[M0 Foundations](docs/design/13-operations-and-delivery.md#138-delivery-roadmap),
+has started. So far the repository contains:
+
+- **The intent model** `nodr/v1alpha1`: JSON Schemas for each kind, semantic
+  checks, and validation of the references between resources.
+- **The lens engine** that keeps intent and HCL in sync, with field-level
+  ownership. It edits only the bytes it has to, so comments, hand formatting
+  and code written by hand survive.
+- **The VM lens**, which maps a `VirtualMachine` to a
+  `proxmox_virtual_environment_vm` of the `bpg/proxmox` provider and back.
+  Property-based tests check the lens laws of
+  [§4.5](docs/design/04-dual-mode-and-sync.md#45-lenses).
+- **The `nodr` command line**, which validates a workspace, renders engine
+  code and shows who owns each field.
+
+## Try it
+
+With Go 1.24 or later:
+
+```console
+$ make build
+$ bin/nodr validate -w examples/homelab
+8 documents valid
+$ bin/nodr render -w examples/homelab vm/web-01
+$ bin/nodr describe -w examples/homelab vm/web-01 --ownership
+```
+
+The [homelab example](examples/homelab/README.md) explains the workspace.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers development.

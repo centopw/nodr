@@ -1,0 +1,404 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VirtualMachine",
+  "description": "A QEMU/KVM guest on Proxmox VE.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nodr/v1alpha1" },
+    "kind": { "const": "VirtualMachine" },
+    "metadata": { "$ref": "metadata.json" },
+    "spec": { "$ref": "#/$defs/spec" }
+  },
+  "$defs": {
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["placement", "resources"],
+      "properties": {
+        "placement": { "$ref": "#/$defs/placement" },
+        "identity": { "$ref": "#/$defs/identity" },
+        "source": { "$ref": "#/$defs/source" },
+        "resources": { "$ref": "#/$defs/resources" },
+        "disks": {
+          "type": "array",
+          "description": "Disks, attached in order as scsi0, scsi1 and so on.",
+          "maxItems": 31,
+          "items": { "$ref": "#/$defs/disk" },
+          "x-nodr-tier": "basic"
+        },
+        "nics": {
+          "type": "array",
+          "description": "Network interfaces, attached in order as net0, net1 and so on.",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/nic" },
+          "x-nodr-tier": "basic"
+        },
+        "guest": { "$ref": "#/$defs/guest" },
+        "ha": { "$ref": "#/$defs/ha" },
+        "policies": { "$ref": "#/$defs/policies" },
+        "lifecycle": { "$ref": "#/$defs/lifecycle" },
+        "proxmox": { "$ref": "#/$defs/proxmox" }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cluster"],
+      "properties": {
+        "cluster": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The Proxmox cluster that runs the guest.",
+          "x-nodr-ref": "ProxmoxCluster",
+          "x-nodr-immutable": true,
+          "x-nodr-tier": "basic"
+        },
+        "node": {
+          "type": "string",
+          "description": "auto lets nodr choose the node; a node name pins the guest to that node.",
+          "default": "auto",
+          "pattern": "^(auto|[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)$",
+          "x-nodr-tier": "standard"
+        },
+        "assignedNode": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The node nodr assigned the guest to. For HA guests it follows relocations.",
+          "x-nodr-allocated": true,
+          "x-nodr-runtime": true,
+          "x-nodr-tier": "expert"
+        },
+        "affinity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "separateFrom": {
+              "$ref": "common.json#/$defs/names",
+              "description": "Guests that must never run on the same node as this one.",
+              "x-nodr-ref": "VirtualMachine"
+            },
+            "keepWith": {
+              "$ref": "common.json#/$defs/names",
+              "description": "Guests that should run on the same node as this one.",
+              "x-nodr-ref": "VirtualMachine"
+            }
+          },
+          "x-nodr-tier": "expert"
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vmid": {
+          "$ref": "common.json#/$defs/vmid",
+          "description": "The Proxmox guest ID, allocated from the environment's range.",
+          "x-nodr-allocated": true,
+          "x-nodr-immutable": true,
+          "x-nodr-tier": "expert"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The template the guest is cloned from.",
+          "x-nodr-ref": "Template",
+          "x-nodr-immutable": true,
+          "x-nodr-tier": "basic"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory"],
+      "properties": {
+        "cpu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cores"],
+          "properties": {
+            "cores": {
+              "type": "integer",
+              "description": "CPU cores per socket.",
+              "minimum": 1,
+              "maximum": 512,
+              "x-nodr-impact": { "increase": "hot-plug-if-enabled", "decrease": "reboot" },
+              "x-nodr-tier": "basic"
+            },
+            "sockets": {
+              "type": "integer",
+              "description": "CPU sockets.",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 8,
+              "x-nodr-impact": "reboot",
+              "x-nodr-tier": "expert"
+            },
+            "type": {
+              "type": "string",
+              "description": "The emulated CPU model. host is fastest but prevents live migration between nodes with different CPUs.",
+              "default": "x86-64-v2-AES",
+              "pattern": "^[A-Za-z0-9_.+-]+$",
+              "x-nodr-impact": "reboot",
+              "x-nodr-tier": "expert"
+            }
+          }
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size"],
+          "properties": {
+            "size": {
+              "$ref": "common.json#/$defs/quantity",
+              "description": "Memory assigned to the guest, in whole MiB.",
+              "x-nodr-impact": { "increase": "hot-plug-if-enabled", "decrease": "reboot" },
+              "x-nodr-ui": { "widget": "quantity", "presets": ["1Gi", "2Gi", "4Gi", "8Gi", "16Gi"] },
+              "x-nodr-tier": "basic"
+            },
+            "minimum": {
+              "$ref": "common.json#/$defs/quantity",
+              "description": "Ballooning floor, in whole MiB. Leave empty to disable ballooning.",
+              "x-nodr-tier": "standard"
+            }
+          }
+        }
+      }
+    },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "storage", "size"],
+      "properties": {
+        "name": {
+          "$ref": "common.json#/$defs/name",
+          "description": "A name for the disk, unique within the guest."
+        },
+        "storage": {
+          "$ref": "common.json#/$defs/proxmoxName",
+          "description": "The Proxmox storage that holds the disk.",
+          "x-nodr-tier": "basic"
+        },
+        "size": {
+          "$ref": "common.json#/$defs/quantity",
+          "description": "Disk size in whole GiB. Disks can grow but never shrink.",
+          "x-nodr-tier": "basic"
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "discard": {
+              "type": "boolean",
+              "description": "Pass discard requests to the storage, which lets thin storage reclaim space.",
+              "default": false
+            },
+            "ssd": {
+              "type": "boolean",
+              "description": "Present the disk to the guest as an SSD.",
+              "default": false
+            },
+            "iothread": {
+              "type": "boolean",
+              "description": "Give the disk its own I/O thread.",
+              "default": false
+            }
+          },
+          "x-nodr-tier": "standard"
+        }
+      }
+    },
+    "nic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["network"],
+      "properties": {
+        "network": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The network the interface is attached to.",
+          "x-nodr-ref": "Network",
+          "x-nodr-tier": "basic"
+        },
+        "mac": {
+          "type": "string",
+          "description": "The MAC address, derived by nodr from the resource UID.",
+          "pattern": "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$",
+          "x-nodr-allocated": true,
+          "x-nodr-tier": "expert"
+        },
+        "ipv4": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "description": "auto allocates an address from the network, static uses the given address, dhcp asks the network's DHCP server.",
+              "enum": ["auto", "static", "dhcp"],
+              "default": "dhcp"
+            },
+            "address": {
+              "$ref": "common.json#/$defs/ipv4Prefix",
+              "description": "The address with prefix length. nodr fills it for mode auto.",
+              "x-nodr-allocated": true
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "mode": { "const": "static" } }, "required": ["mode"] },
+              "then": { "required": ["address"] }
+            }
+          ],
+          "x-nodr-tier": "basic"
+        }
+      }
+    },
+    "guest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "boolean",
+          "description": "Enable the QEMU guest agent, which reports IP addresses, freezes file systems for consistent backups and allows clean shutdowns.",
+          "default": true,
+          "x-nodr-tier": "standard"
+        },
+        "cloudInit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "user": {
+              "type": "string",
+              "description": "The user cloud-init creates.",
+              "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+            },
+            "authorizedKeys": {
+              "$ref": "common.json#/$defs/names",
+              "description": "SSH keys authorized for the user.",
+              "x-nodr-ref": "SSHKey"
+            }
+          },
+          "x-nodr-tier": "basic"
+        },
+        "profile": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The configuration profile applied to the operating system.",
+          "x-nodr-ref": "ConfigProfile",
+          "x-nodr-tier": "basic"
+        }
+      }
+    },
+    "ha": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Restart the guest on another node when its node fails.",
+          "default": false
+        },
+        "maxRestart": {
+          "type": "integer",
+          "description": "Restart attempts on the same node before relocating.",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 10
+        },
+        "maxRelocate": {
+          "type": "integer",
+          "description": "Relocation attempts to other nodes.",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 10
+        }
+      },
+      "x-nodr-tier": "standard"
+    },
+    "policies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backup": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The backup policy for the guest.",
+          "x-nodr-ref": "BackupPolicy"
+        },
+        "updates": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The update policy for the guest.",
+          "x-nodr-ref": "UpdatePolicy"
+        }
+      },
+      "x-nodr-tier": "basic"
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "powerState": {
+          "type": "string",
+          "description": "running or stopped makes the power state part of desired state; unmanaged leaves it to operators.",
+          "enum": ["running", "stopped", "unmanaged"],
+          "default": "running",
+          "x-nodr-tier": "standard"
+        },
+        "protection": {
+          "type": "boolean",
+          "description": "Set the Proxmox protection flag, which blocks deletion.",
+          "default": true,
+          "x-nodr-tier": "standard"
+        },
+        "startOnBoot": {
+          "type": "boolean",
+          "description": "Start the guest when its node boots.",
+          "default": true,
+          "x-nodr-tier": "standard"
+        },
+        "ignoreDrift": {
+          "type": "array",
+          "description": "Fields whose differences from the running guest are not reported as drift.",
+          "items": { "type": "string", "pattern": "^spec(\\.[A-Za-z0-9]+|\\[[0-9]+\\])+$" },
+          "uniqueItems": true,
+          "x-nodr-tier": "expert"
+        }
+      }
+    },
+    "proxmox": {
+      "type": "object",
+      "description": "Settings that only exist on Proxmox VE.",
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "The emulated machine type, such as q35 or pc.",
+          "pattern": "^[a-z0-9][a-z0-9.+-]*$",
+          "x-nodr-impact": "reboot"
+        },
+        "bios": {
+          "type": "string",
+          "description": "The firmware: seabios for legacy BIOS or ovmf for UEFI.",
+          "enum": ["seabios", "ovmf"],
+          "x-nodr-impact": "reboot"
+        },
+        "scsiController": {
+          "type": "string",
+          "description": "The SCSI controller model.",
+          "enum": ["lsi", "lsi53c810", "virtio-scsi-pci", "virtio-scsi-single", "megasas", "pvscsi"],
+          "x-nodr-impact": "reboot"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Extra Proxmox tags. nodr also sets the tags nodr, env-<environment> and app-<app>.",
+          "items": { "type": "string", "pattern": "^[a-z0-9_][a-z0-9_+.-]*$" },
+          "uniqueItems": true
+        }
+      },
+      "x-nodr-tier": "expert"
+    }
+  }
+}

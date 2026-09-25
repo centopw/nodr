@@ -1,0 +1,13 @@
+apiVersion: nodr/v1alpha1
+kind: ProxmoxCluster
+metadata:
+  name: pve-main
+spec:
+  endpoints:
+    - https://10.0.10.11:8006
+    - https://10.0.10.12:8006
+    - https://10.0.10.13:8006
+  credentialsRef: proxmox/pve-main-token
+  nodes: [pve1, pve2, pve3]
+  network:
+    guestBridge: vmbr0

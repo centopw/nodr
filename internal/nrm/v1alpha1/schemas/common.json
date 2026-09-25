@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common definitions",
+  "description": "Definitions shared by the nodr/v1alpha1 schemas.",
+  "$defs": {
+    "name": {
+      "type": "string",
+      "description": "A resource name: lowercase letters, digits and hyphens, starting and ending with a letter or digit.",
+      "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+    },
+    "names": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/name" },
+      "uniqueItems": true
+    },
+    "secretRef": {
+      "type": "string",
+      "description": "The name of a secret in the secrets service, such as proxmox/pve-main-token. The value never appears in the workspace.",
+      "pattern": "^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?(/[a-z0-9]([-a-z0-9_.]*[a-z0-9])?)*$",
+      "x-nodr-sensitive": true
+    },
+    "quantity": {
+      "type": "string",
+      "description": "A size such as 512Mi, 4Gi or 1.5Gi. Binary suffixes (Ki, Mi, Gi, Ti, Pi) are powers of 1024, decimal suffixes (k, M, G, T, P) powers of 1000.",
+      "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|k|M|G|T|P)?$",
+      "x-nodr-unit": "bytes"
+    },
+    "duration": {
+      "type": "string",
+      "description": "A duration such as 90s, 15m or 12h.",
+      "pattern": "^([0-9]+(ms|s|m|h))+$"
+    },
+    "ipv4Address": {
+      "type": "string",
+      "description": "An IPv4 address, such as 10.0.20.1.",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"
+    },
+    "ipv4Prefix": {
+      "type": "string",
+      "description": "An IPv4 address with a prefix length, such as 10.0.20.21/24.",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$"
+    },
+    "ipv4Range": {
+      "type": "string",
+      "description": "An inclusive IPv4 address range, such as 10.0.30.100-10.0.30.249.",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])-((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"
+    },
+    "vmid": {
+      "type": "integer",
+      "description": "A Proxmox VE guest ID.",
+      "minimum": 100,
+      "maximum": 999999999
+    },
+    "proxmoxName": {
+      "type": "string",
+      "description": "An identifier used by Proxmox VE, such as a storage ID or a bridge name.",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: dns-01
+  uid: 01J9Z3M8W1E6R2T4Y7V9H0Q3P5
+  labels:
+    nodr/environment: prod
+    app: dns
+spec:
+  placement:
+    cluster: pve-main
+    assignedNode: pve1
+  identity:
+    vmid: 1003
+  source:
+    template: debian-12-cloud
+  resources:
+    cpu: { cores: 1 }
+    memory: { size: 1Gi }
+  disks:
+    - name: root
+      storage: local-lvm
+      size: 8Gi
+  nics:
+    - network: lan
+      mac: BC:24:11:3A:5E:02
+      ipv4: { mode: static, address: 10.0.10.53/24 }
+  guest:
+    cloudInit:
+      user: ops
+      authorizedKeys: [ops-team]

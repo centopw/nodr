@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProxmoxCluster",
+  "description": "A Proxmox VE cluster, or a single node treated as a cluster of one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nodr/v1alpha1" },
+    "kind": { "const": "ProxmoxCluster" },
+    "metadata": { "$ref": "metadata.json" },
+    "spec": { "$ref": "#/$defs/spec" }
+  },
+  "$defs": {
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoints", "credentialsRef"],
+      "properties": {
+        "endpoints": {
+          "type": "array",
+          "description": "API endpoints of the cluster's nodes. nodr fails over between them.",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^https://\\S+$" },
+          "uniqueItems": true,
+          "x-nodr-tier": "basic"
+        },
+        "credentialsRef": {
+          "$ref": "common.json#/$defs/secretRef",
+          "description": "The secret that holds the API token nodr uses.",
+          "x-nodr-tier": "basic"
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fingerprint": {
+              "type": "string",
+              "description": "The SHA-256 fingerprint of the certificate, confirmed on first contact.",
+              "pattern": "^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$"
+            }
+          },
+          "x-nodr-tier": "standard"
+        },
+        "nodes": {
+          "$ref": "common.json#/$defs/names",
+          "description": "The cluster's nodes.",
+          "x-nodr-tier": "basic"
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "guestBridge": {
+              "$ref": "common.json#/$defs/proxmoxName",
+              "description": "The VLAN-aware bridge that guest network interfaces attach to.",
+              "default": "vmbr0"
+            }
+          },
+          "x-nodr-tier": "standard"
+        }
+      }
+    }
+  }
+}

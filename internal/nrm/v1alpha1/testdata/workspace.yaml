@@ -1,0 +1,28 @@
+apiVersion: nodr/v1alpha1
+kind: Workspace
+metadata:
+  name: home
+spec:
+  environments:
+    prod: { vmidRange: [1000, 1999] }
+    lab: { vmidRange: [2000, 2999] }
+    templates: { vmidRange: [9000, 9099] }
+  engines:
+    opentofu: { version: ">= 1.11, < 2.0" }
+    terraform: { version: ">= 1.8" }
+    ansible: { core: ">= 2.19, < 3.0" }
+  bindings:
+    VirtualMachine/provision: opentofu
+    VirtualMachine/guest: ansible
+    Router/config: uci
+  bindingOverrides:
+    - selector: { matchLabels: { legacy: ansible } }
+      bindings: { VirtualMachine/provision: ansible }
+  stateUnits:
+    strategy: per-cluster-and-environment
+  defaults:
+    VirtualMachine:
+      policies: { backup: nightly-7d4w, updates: security-weekly }
+      lifecycle: { protection: true }
+  git:
+    mirror: { url: https://git.example.com/home/infra.git, direction: push }

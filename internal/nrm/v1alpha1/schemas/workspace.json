@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workspace",
+  "description": "The workspace manifest, nodr.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nodr/v1alpha1" },
+    "kind": { "const": "Workspace" },
+    "metadata": { "$ref": "metadata.json" },
+    "spec": { "$ref": "#/$defs/spec" }
+  },
+  "$defs": {
+    "engine": {
+      "type": "string",
+      "enum": ["opentofu", "terraform", "ansible", "native", "uci", "kubernetes", "compose"]
+    },
+    "bindings": {
+      "type": "object",
+      "description": "Engine per kind and aspect, such as VirtualMachine/provision: opentofu.",
+      "propertyNames": { "pattern": "^[A-Z][A-Za-z0-9]*/[a-z][-a-z0-9]*$" },
+      "additionalProperties": { "$ref": "#/$defs/engine" }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "environments": {
+          "type": "object",
+          "description": "Environments and the Proxmox guest ID range of each.",
+          "propertyNames": { "$ref": "common.json#/$defs/name" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "vmidRange": {
+                "type": "array",
+                "description": "The first and last guest ID of the range.",
+                "prefixItems": [
+                  { "$ref": "common.json#/$defs/vmid" },
+                  { "$ref": "common.json#/$defs/vmid" }
+                ],
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        },
+        "engines": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "opentofu": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "version": { "type": "string", "description": "A version constraint." } }
+            },
+            "terraform": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "version": { "type": "string", "description": "A version constraint." } }
+            },
+            "ansible": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "core": { "type": "string", "description": "A version constraint for ansible-core." } }
+            }
+          }
+        },
+        "bindings": { "$ref": "#/$defs/bindings" },
+        "bindingOverrides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["selector", "bindings"],
+            "properties": {
+              "selector": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "matchLabels": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                  }
+                }
+              },
+              "bindings": { "$ref": "#/$defs/bindings" }
+            }
+          }
+        },
+        "stateUnits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": ["per-cluster-and-environment", "per-cluster", "single"],
+              "default": "per-cluster-and-environment"
+            }
+          }
+        },
+        "defaults": {
+          "type": "object",
+          "description": "Default spec values per kind.",
+          "propertyNames": { "pattern": "^[A-Z][A-Za-z0-9]*$" },
+          "additionalProperties": { "type": "object" }
+        },
+        "git": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mirror": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url"],
+              "properties": {
+                "url": { "type": "string" },
+                "direction": { "type": "string", "enum": ["push", "pull", "both"], "default": "push" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
