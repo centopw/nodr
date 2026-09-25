@@ -9,8 +9,8 @@
   `nodr plan` and `nodr apply`, the OpenTofu integration tests, and to
   validate the engine code of the examples.
 
-`make help` lists the development tasks: `build`, `test`, `test-race`,
-`cover`, `vet`, `lint`, `fmt`, `tidy` and `clean`.
+`make help` lists the development tasks: `build`, `snapshot`, `test`,
+`test-race`, `cover`, `vet`, `lint`, `fmt`, `tidy` and `clean`.
 
 ## Layout
 
@@ -32,6 +32,7 @@
 | `internal/quantity`, `internal/diag`, `internal/buildinfo` | Byte quantities, diagnostics, version information |
 | `docs/` | Technical design and architecture decisions |
 | `examples/` | Example workspaces |
+| `scripts/` | Release scripts and their tests |
 
 ## Tests
 
@@ -66,14 +67,45 @@
   messages describe the change and nothing else.
 - Pull requests need a green CI: tests on Go 1.24 and the latest Go,
   including the OpenTofu integration tests, lint, a check of `go.sum`
-  against the checksum database, and OpenTofu validation of the example
-  code.
+  against the checksum database, OpenTofu validation of the example code,
+  and a check of the release configuration.
 
 ## Changelog
 
 - **Every user-facing change** adds a line under `## [Unreleased]` in
   [CHANGELOG.md](CHANGELOG.md), in the same pull request.
-- **A release** renames that section to `## [x.y.z] - YYYY-MM-DD` and is
-  tagged `vx.y.z`.
+- **A release** moves those lines to a `## [x.y.z] - YYYY-MM-DD` section
+  and is tagged `vx.y.z`, as described in [Releasing](#releasing).
 - **Versions** follow [Semantic Versioning](https://semver.org/), starting
   at `0.x` until the API is stable.
+
+## Releasing
+
+1. In a pull request, move the entries under `## [Unreleased]` in
+   [CHANGELOG.md](CHANGELOG.md) to a new `## [x.y.z] - YYYY-MM-DD` section
+   below it. `scripts/changelog-notes.sh x.y.z` prints the notes that the
+   release will have.
+2. After the merge, tag the merge commit on `main` with an annotated tag,
+   and push the tag:
+
+   ```console
+   $ git switch main
+   $ git pull
+   $ git tag -a vx.y.z -m "nodr x.y.z"
+   $ git push origin vx.y.z
+   ```
+
+3. The [release workflow](.github/workflows/release.yml) builds `nodr` for
+   Linux, macOS and Windows on amd64 and arm64, adds `checksums.txt` and
+   build provenance attestations, and publishes the GitHub Release with the
+   notes of the version from the changelog. If the changelog has no
+   section for the version, it fails and publishes nothing. A tag with a
+   pre-release suffix, such as `v0.2.0-rc.1`, needs a section of its own
+   and publishes a pre-release.
+
+The build is configured in [.goreleaser.yaml](.goreleaser.yaml). On every
+pull request, CI checks the configuration, builds a snapshot and runs
+`scripts/changelog-notes_test.sh`, which tests the extraction of the
+release notes. `make snapshot` builds the same archives locally in
+`dist/`, without publishing anything; it needs
+[GoReleaser](https://goreleaser.com/) v2.

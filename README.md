@@ -52,6 +52,31 @@ has started. So far the repository contains:
   state units below `terraform/`, writes the files that change and plans
   each unit, and `nodr apply` applies the saved plans after confirmation.
 
+## Install
+
+Release archives of `nodr` for Linux, macOS and Windows on amd64 and arm64
+are on the [releases page](../../releases). Download the archive for your
+platform and `checksums.txt`, and verify the archive:
+
+```console
+$ sha256sum -c checksums.txt --ignore-missing
+nodr_0.1.0_linux_amd64.tar.gz: OK
+$ tar -xzf nodr_0.1.0_linux_amd64.tar.gz nodr
+$ ./nodr version
+```
+
+On macOS, use `shasum -a 256` instead of `sha256sum`. The archives for
+Windows are `.zip` files.
+
+Each release also has build provenance attestations, which show that an
+archive was built from this repository by its release workflow. To check
+one with the [GitHub CLI](https://cli.github.com/), where `<owner>/<repo>`
+is the repository of the releases page:
+
+```console
+$ gh attestation verify nodr_0.1.0_linux_amd64.tar.gz --repo <owner>/<repo>
+```
+
 ## Try it
 
 With Go 1.24 or later:
@@ -77,3 +102,7 @@ $ bin/nodr apply -w <workspace>
 
 The [homelab example](examples/homelab/README.md) explains the workspace.
 [CONTRIBUTING.md](CONTRIBUTING.md) covers development.
+
+## License
+
+nodr is licensed under the Apache License 2.0; see [LICENSE](LICENSE).
