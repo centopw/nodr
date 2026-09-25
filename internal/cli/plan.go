@@ -132,6 +132,14 @@ func (a *app) planUnits(ctx context.Context, only []string, planDir string) ([]u
 		fmt.Fprintf(a.stderr, "nodr: compilation failed; no file was changed\n")
 		return nil, errReported
 	}
+	// Check --unit before any file changes.
+	units, err := stateUnits(l.ws.FS, files)
+	if err != nil {
+		return nil, err
+	}
+	if units, err = selectUnits(units, only); err != nil {
+		return nil, err
+	}
 	// Git is the ledger, so what OpenTofu plans is the code in the workspace.
 	if err := compile.Write(l.ws, files); err != nil {
 		return nil, err
@@ -140,13 +148,6 @@ func (a *app) planUnits(ctx context.Context, only []string, planDir string) ([]u
 		fmt.Fprintf(a.stdout, "wrote %s\n", p)
 	}
 
-	units, err := stateUnits(l.ws.FS)
-	if err != nil {
-		return nil, err
-	}
-	if units, err = selectUnits(units, only); err != nil {
-		return nil, err
-	}
 	if len(units) == 0 {
 		fmt.Fprintf(a.stdout, "no state units: no directory below %s/ holds .tf files\n", terraformDir)
 		return nil, nil
@@ -247,7 +248,8 @@ func (a *app) confirm(ctx context.Context) (bool, error) {
 		if ans.err != nil && !errors.Is(ans.err, io.EOF) {
 			return false, fmt.Errorf("read the answer: %w", ans.err)
 		}
-		return strings.TrimSpace(ans.text) == "yes", nil
+		// Only the end of the line may follow, as \n or \r\n.
+		return strings.TrimSuffix(strings.TrimSuffix(ans.text, "\n"), "\r") == "yes", nil
 	case <-ctx.Done():
 		// End the line of the question.
 		fmt.Fprintln(a.stdout)
@@ -257,7 +259,8 @@ func (a *app) confirm(ctx context.Context) (bool, error) {
 
 // printPlan prints the summary of the plan of the unit in dir: a header
 // with the number of resources to add, change, replace and destroy, and a
-// line for each change.
+// line for each change. An instance that the plan moves or imports gets a
+// line for that before the line for its action, if it has one.
 func (a *app) printPlan(dir string, p opentofu.Plan) {
 	if !p.HasChanges() {
 		fmt.Fprintf(a.stdout, "%s: no changes\n", dir)
@@ -265,16 +268,29 @@ func (a *app) printPlan(dir string, p opentofu.Plan) {
 	}
 	s := p.Summary()
 	header := fmt.Sprintf("%s: %d to add, %d to change, %d to replace, %d to destroy", dir, s.Create, s.Update, s.Replace, s.Delete)
-	// Reading a data source and forgetting a resource change no
-	// infrastructure, so they are counted only if the plan has them.
+	// Reading a data source, and forgetting, importing and moving a
+	// resource change no infrastructure, so they are counted only if the
+	// plan has them.
 	if s.Read > 0 {
 		header += fmt.Sprintf(", %d to read", s.Read)
 	}
 	if s.Forget > 0 {
 		header += fmt.Sprintf(", %d to forget", s.Forget)
 	}
+	if s.Import > 0 {
+		header += fmt.Sprintf(", %d to import", s.Import)
+	}
+	if s.Move > 0 {
+		header += fmt.Sprintf(", %d to move", s.Move)
+	}
 	fmt.Fprintln(a.stdout, header)
 	for _, c := range p.Changes {
+		if c.PreviousAddress != "" {
+			fmt.Fprintf(a.stdout, "  %-7s  %s to %s\n", "move", c.PreviousAddress, c.Address)
+		}
+		if c.Importing {
+			fmt.Fprintf(a.stdout, "  %-7s  %s\n", "import", c.Address)
+		}
 		if c.Action != opentofu.NoOp {
 			fmt.Fprintf(a.stdout, "  %-7s  %s\n", actionName(c.Action), c.Address)
 		}
@@ -324,13 +340,11 @@ func unitError(dir string, err error) error {
 // stateUnits returns the directories of the state units in fsys, the
 // directories right below terraform/ that hold .tf files, in sorted order
 // (design §5.5). Directories further down, such as those of local modules,
-// are not units.
-func stateUnits(fsys fs.FS) ([]string, error) {
+// are not units. pending holds the files that are about to be written, by
+// workspace-relative path, and they can add units.
+func stateUnits(fsys fs.FS, pending map[string][]byte) ([]string, error) {
 	entries, err := fs.ReadDir(fsys, terraformDir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 	var units []string
@@ -347,6 +361,12 @@ func stateUnits(fsys fs.FS) ([]string, error) {
 			units = append(units, dir)
 		}
 	}
+	for p := range pending {
+		if dir := path.Dir(p); path.Dir(dir) == terraformDir && path.Ext(p) == ".tf" && !slices.Contains(units, dir) {
+			units = append(units, dir)
+		}
+	}
+	slices.Sort(units)
 	return units, nil
 }
 

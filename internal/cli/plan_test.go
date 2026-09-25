@@ -97,14 +97,18 @@ func installFakeTofu(t *testing.T) *fakeTofu {
 // setPlan sets the plan that show prints for a unit. Each change is the
 // actions of a resource change in the JSON form of a plan, separated by
 // commas, and an address, such as
-// "delete,create proxmox_virtual_environment_vm.web_01".
+// "delete,create proxmox_virtual_environment_vm.web_01". The address may be
+// followed by "importing" for an instance that the plan imports, or by
+// "from <address>" for one that it moves.
 func (f *fakeTofu) setPlan(t *testing.T, unit string, changes ...string) {
 	t.Helper()
 	type resourceChange struct {
-		Address string `json:"address"`
-		Type    string `json:"type"`
-		Change  struct {
-			Actions []string `json:"actions"`
+		Address         string `json:"address"`
+		PreviousAddress string `json:"previous_address,omitempty"`
+		Type            string `json:"type"`
+		Change          struct {
+			Actions   []string          `json:"actions"`
+			Importing map[string]string `json:"importing,omitempty"`
 		} `json:"change"`
 	}
 	plan := struct {
@@ -112,10 +116,18 @@ func (f *fakeTofu) setPlan(t *testing.T, unit string, changes ...string) {
 		ResourceChanges []resourceChange `json:"resource_changes"`
 	}{FormatVersion: "1.2", ResourceChanges: []resourceChange{}}
 	for _, c := range changes {
-		actions, address, _ := strings.Cut(c, " ")
-		rc := resourceChange{Address: address}
-		rc.Type, _, _ = strings.Cut(address, ".")
-		rc.Change.Actions = strings.Split(actions, ",")
+		fields := strings.Fields(c)
+		rc := resourceChange{Address: fields[1]}
+		rc.Type, _, _ = strings.Cut(rc.Address, ".")
+		rc.Change.Actions = strings.Split(fields[0], ",")
+		switch {
+		case len(fields) == 3 && fields[2] == "importing":
+			rc.Change.Importing = map[string]string{"id": "imported-id"}
+		case len(fields) == 4 && fields[2] == "from":
+			rc.PreviousAddress = fields[3]
+		case len(fields) != 2:
+			t.Fatalf("invalid change %q", c)
+		}
 		plan.ResourceChanges = append(plan.ResourceChanges, rc)
 	}
 	data, err := json.Marshal(plan)
@@ -399,6 +411,30 @@ func TestPlanWithoutUnits(t *testing.T) {
 	tofu.checkCalls(t)
 }
 
+// TestPlanChecksUnitsFirst checks that plan and apply check --unit before
+// they write any file, and accept a unit that only the compiled code
+// creates.
+func TestPlanChecksUnitsFirst(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := writeWorkspace(t, planFiles)
+	for _, args := range [][]string{{"plan"}, {"apply", "--auto-approve"}} {
+		r := run(append(args, "-w", root, "--unit", "terraform/pve-main-compte")...)
+		r.check(t, exitError)
+		if want := "nodr: terraform/pve-main-compte is not a state unit; the units are terraform/pve-main-compute\n"; r.stderr != want || r.stdout != "" {
+			t.Errorf("%v: stderr = %q, want %q; stdout = %q", args, r.stderr, want, r.stdout)
+		}
+	}
+	tofu.checkCalls(t)
+	checkNoCode(t, root)
+
+	r := run("plan", "-w", root, "--unit", "terraform/pve-main-compute")
+	r.check(t, exitOK)
+	if want := wroteUnit + "terraform/pve-main-compute: no changes\n"; r.stdout != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", r.stdout, want)
+	}
+	tofu.checkCalls(t, planCalls("pve-main-compute")...)
+}
+
 func TestApplyAutoApprove(t *testing.T) {
 	tofu := installFakeTofu(t)
 	root := writeWorkspace(t, planFiles)
@@ -446,7 +482,7 @@ func TestApplyAsks(t *testing.T) {
 	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
 	const question = "Apply these changes? Only 'yes' is accepted: "
 
-	for _, answer := range []string{"no\n", "y\n", "YES\n", "\n", ""} {
+	for _, answer := range []string{"no\n", "y\n", "YES\n", " yes\n", "yes \n", "yes please\n", "\n", ""} {
 		r := runInTerminal(answer, "apply", "-w", root)
 		r.check(t, exitError)
 		// The question follows the summary that it is about.
@@ -459,15 +495,18 @@ func TestApplyAsks(t *testing.T) {
 		tofu.checkCalls(t, planCalls("pve-main-compute")...)
 	}
 
-	r := runInTerminal("yes\n", "apply", "-w", root)
-	r.check(t, exitOK)
-	if want := addWeb01 + question + "terraform/pve-main-compute: applied\n"; r.stdout != want {
-		t.Errorf("stdout =\n%s\nwant\n%s", r.stdout, want)
+	// The line can end with \r\n, as on Windows, or with the input.
+	for _, answer := range []string{"yes\n", "yes\r\n", "yes"} {
+		r := runInTerminal(answer, "apply", "-w", root)
+		r.check(t, exitOK)
+		if want := addWeb01 + question + "terraform/pve-main-compute: applied\n"; r.stdout != want {
+			t.Errorf("answer %q: stdout =\n%s\nwant\n%s", answer, r.stdout, want)
+		}
+		if !strings.Contains(r.stderr, "applied pve-main-compute\n") {
+			t.Errorf("answer %q: stderr = %q, want the output of tofu apply", answer, r.stderr)
+		}
+		tofu.checkCalls(t, append(planCalls("pve-main-compute"), applyCall("pve-main-compute"))...)
 	}
-	if !strings.Contains(r.stderr, "applied pve-main-compute\n") {
-		t.Errorf("stderr = %q, want the output of tofu apply", r.stderr)
-	}
-	tofu.checkCalls(t, append(planCalls("pve-main-compute"), applyCall("pve-main-compute"))...)
 }
 
 func TestApplyNeedsATerminal(t *testing.T) {
@@ -502,6 +541,55 @@ func TestApplyWithoutChanges(t *testing.T) {
 	tofu.checkCalls(t, planCalls("pve-main-compute")...)
 }
 
+// TestApplyImportsAndMoves checks that apply applies a plan that only
+// imports and moves resources, and that imports and moves need no
+// --allow-destroy.
+func TestApplyImportsAndMoves(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := writeWorkspace(t, planFiles)
+	tofu.setPlan(t, "pve-main-compute",
+		"no-op proxmox_virtual_environment_vm.dns_01 importing",
+		"no-op proxmox_virtual_environment_vm.web_01 from proxmox_virtual_environment_vm.web",
+	)
+	r := run("apply", "-w", root, "--auto-approve")
+	r.check(t, exitOK)
+	want := wroteUnit + `terraform/pve-main-compute: 0 to add, 0 to change, 0 to replace, 0 to destroy, 1 to import, 1 to move
+  import   proxmox_virtual_environment_vm.dns_01
+  move     proxmox_virtual_environment_vm.web to proxmox_virtual_environment_vm.web_01
+terraform/pve-main-compute: applied
+`
+	if r.stdout != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", r.stdout, want)
+	}
+	tofu.checkCalls(t, append(planCalls("pve-main-compute"), applyCall("pve-main-compute"))...)
+
+	// An instance that is imported or moved can have another action too,
+	// and only that action can need --allow-destroy.
+	tofu.setPlan(t, "pve-main-compute",
+		"update proxmox_virtual_environment_vm.dns_01 importing",
+		"delete,create proxmox_virtual_environment_vm.web_01 from proxmox_virtual_environment_vm.web",
+	)
+	r = run("apply", "-w", root, "--auto-approve")
+	r.check(t, exitError)
+	want = `terraform/pve-main-compute: 0 to add, 1 to change, 1 to replace, 0 to destroy, 1 to import, 1 to move
+  import   proxmox_virtual_environment_vm.dns_01
+  change   proxmox_virtual_environment_vm.dns_01
+  move     proxmox_virtual_environment_vm.web to proxmox_virtual_environment_vm.web_01
+  replace  proxmox_virtual_environment_vm.web_01
+`
+	if r.stdout != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", r.stdout, want)
+	}
+	const refusal = `nodr: the plan replaces or destroys resources:
+  terraform/pve-main-compute: replace proxmox_virtual_environment_vm.web_01
+nodr: nothing was applied; run apply with --allow-destroy to make these changes
+`
+	if !strings.HasSuffix(r.stderr, refusal) {
+		t.Errorf("stderr =\n%s\nwant it to end with\n%s", r.stderr, refusal)
+	}
+	tofu.checkCalls(t, planCalls("pve-main-compute")...)
+}
+
 func TestApplyGuardsDestruction(t *testing.T) {
 	tofu := installFakeTofu(t)
 	root := writeWorkspace(t, planFiles)
@@ -509,10 +597,13 @@ func TestApplyGuardsDestruction(t *testing.T) {
 		"delete proxmox_virtual_environment_vm.old_01",
 		"update proxmox_virtual_environment_vm.web_01",
 		"delete,create proxmox_virtual_environment_vm.web_02",
+		// A replace that forgets the old VM instead of deleting it.
+		"create,forget proxmox_virtual_environment_vm.web_03",
 	)
 	const refusal = `nodr: the plan replaces or destroys resources:
   terraform/pve-main-compute: destroy proxmox_virtual_environment_vm.old_01
   terraform/pve-main-compute: replace proxmox_virtual_environment_vm.web_02
+  terraform/pve-main-compute: replace proxmox_virtual_environment_vm.web_03
 nodr: nothing was applied; run apply with --allow-destroy to make these changes
 `
 	// With or without --auto-approve, and before the question.
