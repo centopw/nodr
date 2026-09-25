@@ -116,3 +116,75 @@ func TestPlanAndApply(t *testing.T) {
 	writeUnit(t, unit, "two")
 	planUnit(t, r, filepath.Join(root, "replace.tfplan"), Replace, Summary{Replace: 1})
 }
+
+// TestApplyImportsAndMoves checks that a plan that only imports and moves
+// resources has changes, and that applying it records them in the state.
+func TestApplyImportsAndMoves(t *testing.T) {
+	bin := testBinary(t)
+	root := t.TempDir()
+	unit := filepath.Join(root, "unit")
+	if err := os.Mkdir(unit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeUnit(t, unit, "one")
+	r := &Runner{Binary: bin, Dir: unit, Env: []string{"TF_DATA_DIR=" + filepath.Join(root, "data")}}
+	ctx := t.Context()
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	create := filepath.Join(root, "create.tfplan")
+	planUnit(t, r, create, Create, Summary{Create: 1})
+	if err := r.Apply(ctx, create); err != nil {
+		t.Fatal(err)
+	}
+
+	// terraform_data accepts any ID for an import.
+	src := `resource "terraform_data" "renamed" {
+  input            = "hello"
+  triggers_replace = ["one"]
+}
+
+moved {
+  from = terraform_data.example
+  to   = terraform_data.renamed
+}
+
+resource "terraform_data" "imported" {
+}
+
+import {
+  to = terraform_data.imported
+  id = "imported-id"
+}
+`
+	if err := os.WriteFile(filepath.Join(unit, "main.tf"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	importAndMove := filepath.Join(root, "import-and-move.tfplan")
+	p, err := r.Plan(ctx, importAndMove)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Change{
+		{Address: "terraform_data.imported", Type: "terraform_data", Action: NoOp, Importing: true},
+		{Address: "terraform_data.renamed", Type: "terraform_data", Action: NoOp, PreviousAddress: "terraform_data.example"},
+	}
+	if !reflect.DeepEqual(p.Changes, want) {
+		t.Errorf("Plan changes = %v, want %v", p.Changes, want)
+	}
+	if s := p.Summary(); s != (Summary{Import: 1, Move: 1}) || !p.HasChanges() {
+		t.Errorf("Plan summary = %+v, HasChanges() = %v; want an import and a move", s, p.HasChanges())
+	}
+	if err := r.Apply(ctx, importAndMove); err != nil {
+		t.Fatal(err)
+	}
+
+	// The state holds the import and the move now.
+	p, err = r.Plan(ctx, filepath.Join(root, "no-changes.tfplan"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.HasChanges() {
+		t.Errorf("Plan after the apply has changes: %v", p.Changes)
+	}
+}

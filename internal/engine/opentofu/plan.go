@@ -21,6 +21,8 @@ const (
 	Read   Action = "read"
 	Update Action = "update"
 	// Replace deletes the instance and creates a new one, in either order.
+	// It also stands for forgetting the instance instead of deleting it,
+	// since a new instance takes its place either way.
 	Replace Action = "replace"
 	Delete  Action = "delete"
 	// Forget removes the instance from the state without destroying it, as
@@ -37,6 +39,12 @@ type Change struct {
 	// Type is the resource type, such as proxmox_virtual_environment_vm.
 	Type   string
 	Action Action
+	// PreviousAddress is the address that the plan moves the instance from,
+	// as a moved block says, or "" if the instance does not move.
+	PreviousAddress string
+	// Importing reports whether the plan imports the instance into the
+	// state, as an import block says.
+	Importing bool
 }
 
 // Plan holds the resource changes of a saved plan.
@@ -50,9 +58,14 @@ type Plan struct {
 // NoOp are not counted.
 type Summary struct {
 	Create, Update, Replace, Delete, Read, Forget int
+
+	// Import and Move count the instances that the plan imports and moves,
+	// whatever their action.
+	Import, Move int
 }
 
-// Summary returns the number of changes of each action.
+// Summary returns the number of changes of each action, and of imports and
+// moves.
 func (p Plan) Summary() Summary {
 	var s Summary
 	for _, c := range p.Changes {
@@ -70,14 +83,20 @@ func (p Plan) Summary() Summary {
 		case Forget:
 			s.Forget++
 		}
+		if c.Importing {
+			s.Import++
+		}
+		if c.PreviousAddress != "" {
+			s.Move++
+		}
 	}
 	return s
 }
 
-// HasChanges reports whether the plan changes any resource instance, that
-// is, whether its summary counts anything. A plan that only moves or
-// imports instances, or only changes outputs, has no changes by this
-// measure, although applying it would still update the state.
+// HasChanges reports whether the plan changes, imports or moves any
+// resource instance, that is, whether its summary counts anything. A plan
+// that only changes outputs has no changes by this measure, although
+// applying it would still update the state.
 func (p Plan) HasChanges() bool {
 	return p.Summary() != Summary{}
 }
@@ -90,10 +109,14 @@ func ParsePlan(data []byte) (Plan, error) {
 		FormatVersion   string `json:"format_version"`
 		Errored         bool   `json:"errored"`
 		ResourceChanges []struct {
-			Address string `json:"address"`
-			Type    string `json:"type"`
-			Change  struct {
+			Address         string `json:"address"`
+			PreviousAddress string `json:"previous_address"`
+			Type            string `json:"type"`
+			Change          struct {
 				Actions []string `json:"actions"`
+				// Importing is an object, such as {"id": "..."}, for an
+				// instance that the plan imports.
+				Importing *struct{} `json:"importing"`
 			} `json:"change"`
 		} `json:"resource_changes"`
 	}
@@ -113,7 +136,13 @@ func ParsePlan(data []byte) (Plan, error) {
 		if err != nil {
 			return Plan{}, fmt.Errorf("%s: %w", rc.Address, err)
 		}
-		p.Changes = append(p.Changes, Change{Address: rc.Address, Type: rc.Type, Action: a})
+		p.Changes = append(p.Changes, Change{
+			Address:         rc.Address,
+			Type:            rc.Type,
+			Action:          a,
+			PreviousAddress: rc.PreviousAddress,
+			Importing:       rc.Change.Importing != nil,
+		})
 	}
 	return p, nil
 }
@@ -130,7 +159,7 @@ func action(actions []string) (Action, error) {
 		return Read, nil
 	case "update":
 		return Update, nil
-	case "delete,create", "create,delete":
+	case "delete,create", "create,delete", "forget,create", "create,forget":
 		return Replace, nil
 	case "delete":
 		return Delete, nil

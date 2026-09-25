@@ -12,6 +12,8 @@ import (
 // changes.json is a plan with one change of each kind for terraform_data
 // resources and a terraform_remote_state data source. no-changes.json is
 // the plan for a unit whose only resource is up to date.
+// imports-and-moves.json is a plan that only imports one terraform_data
+// resource and moves another, as an import and a moved block say.
 
 func parseFixture(t *testing.T, name string) Plan {
 	t.Helper()
@@ -36,7 +38,7 @@ func TestParsePlan(t *testing.T) {
 		{Address: "terraform_data.deleted", Type: "terraform_data", Action: Delete},
 		{Address: "terraform_data.kept", Type: "terraform_data", Action: NoOp},
 		// Moved from terraform_data.old_name, and otherwise unchanged.
-		{Address: "terraform_data.new_name", Type: "terraform_data", Action: NoOp},
+		{Address: "terraform_data.new_name", Type: "terraform_data", Action: NoOp, PreviousAddress: "terraform_data.old_name"},
 		// A removed block with destroy = false.
 		{Address: "terraform_data.released", Type: "terraform_data", Action: Forget},
 		// The actions are ["delete", "create"].
@@ -48,12 +50,61 @@ func TestParsePlan(t *testing.T) {
 	if !reflect.DeepEqual(p.Changes, want) {
 		t.Errorf("Changes =\n%v\nwant\n%v", p.Changes, want)
 	}
-	wantSummary := Summary{Create: 1, Update: 1, Replace: 2, Delete: 1, Read: 1, Forget: 1}
+	wantSummary := Summary{Create: 1, Update: 1, Replace: 2, Delete: 1, Read: 1, Forget: 1, Move: 1}
 	if s := p.Summary(); s != wantSummary {
 		t.Errorf("Summary() = %+v, want %+v", s, wantSummary)
 	}
 	if !p.HasChanges() {
 		t.Error("HasChanges() = false, want true")
+	}
+}
+
+// TestParsePlanImportsAndMoves checks that a plan that only imports and
+// moves instances has changes, since applying it changes the state.
+func TestParsePlanImportsAndMoves(t *testing.T) {
+	p := parseFixture(t, "imports-and-moves.json")
+	want := []Change{
+		{Address: "terraform_data.imported", Type: "terraform_data", Action: NoOp, Importing: true},
+		{Address: "terraform_data.moved", Type: "terraform_data", Action: NoOp, PreviousAddress: "terraform_data.old_name"},
+	}
+	if !reflect.DeepEqual(p.Changes, want) {
+		t.Errorf("Changes =\n%v\nwant\n%v", p.Changes, want)
+	}
+	if s, want := p.Summary(), (Summary{Import: 1, Move: 1}); s != want {
+		t.Errorf("Summary() = %+v, want %+v", s, want)
+	}
+	if !p.HasChanges() {
+		t.Error("HasChanges() = false, want true")
+	}
+}
+
+func TestParsePlanActions(t *testing.T) {
+	tests := []struct {
+		actions string
+		want    Action
+	}{
+		{`["no-op"]`, NoOp},
+		{`["create"]`, Create},
+		{`["read"]`, Read},
+		{`["update"]`, Update},
+		{`["delete", "create"]`, Replace},
+		{`["create", "delete"]`, Replace},
+		// A replace that forgets the old instance instead of deleting it.
+		{`["forget", "create"]`, Replace},
+		{`["create", "forget"]`, Replace},
+		{`["delete"]`, Delete},
+		{`["forget"]`, Forget},
+	}
+	for _, tt := range tests {
+		data := `{"format_version": "1.2", "resource_changes": [{"address": "terraform_data.x", "type": "terraform_data", "change": {"actions": ` + tt.actions + `}}]}`
+		p, err := ParsePlan([]byte(data))
+		if err != nil {
+			t.Errorf("%s: %v", tt.actions, err)
+			continue
+		}
+		if len(p.Changes) != 1 || p.Changes[0].Action != tt.want {
+			t.Errorf("%s: Changes = %v, want the action %s", tt.actions, p.Changes, tt.want)
+		}
 	}
 }
 
@@ -79,6 +130,14 @@ func TestHasChanges(t *testing.T) {
 		}}
 		if !p.HasChanges() {
 			t.Errorf("HasChanges() = false for a plan with %s", a)
+		}
+	}
+	for name, c := range map[string]Change{
+		"an import": {Address: "terraform_data.b", Type: "terraform_data", Action: NoOp, Importing: true},
+		"a move":    {Address: "terraform_data.b", Type: "terraform_data", Action: NoOp, PreviousAddress: "terraform_data.a"},
+	} {
+		if !(Plan{Changes: []Change{c}}).HasChanges() {
+			t.Errorf("HasChanges() = false for a plan with only %s", name)
 		}
 	}
 	if (Plan{}).HasChanges() {
