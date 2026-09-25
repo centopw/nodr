@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/nrm"
@@ -33,12 +35,21 @@ func (e usageError) Error() string { return e.err.Error() }
 func (e usageError) Unwrap() error { return e.err }
 
 // Run executes the nodr command line with args, and returns the exit code.
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	a := &app{stdout: stdout, stderr: stderr}
+// Commands that ask for confirmation read the answer from stdin, and ask
+// only if stdin is a terminal. The first interrupt cancels ctx, and
+// interrupts, which may be nil, delivers the later ones, which reach
+// OpenTofu (see opentofu.Runner.Interrupts).
+func Run(ctx context.Context, interrupts <-chan struct{}, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	a := &app{stdin: stdin, stdout: stdout, stderr: stderr, interactive: isTerminal(stdin), interrupts: interrupts}
+	return a.run(ctx, args)
+}
+
+// run executes the command line with args, and returns the exit code.
+func (a *app) run(ctx context.Context, args []string) int {
 	root := a.rootCommand()
 	root.SetArgs(args)
-	root.SetOut(stdout)
-	root.SetErr(stderr)
+	root.SetOut(a.stdout)
+	root.SetErr(a.stderr)
 	err := root.ExecuteContext(ctx)
 	switch {
 	case err == nil:
@@ -46,17 +57,30 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case errors.Is(err, errReported):
 		return exitError
 	case errors.As(err, new(usageError)):
-		fmt.Fprintf(stderr, "nodr: %v\nRun 'nodr --help' for usage.\n", err)
+		fmt.Fprintf(a.stderr, "nodr: %v\nRun 'nodr --help' for usage.\n", err)
 		return exitUsage
 	default:
-		fmt.Fprintf(stderr, "nodr: %v\n", err)
+		fmt.Fprintf(a.stderr, "nodr: %v\n", err)
 		return exitError
 	}
 }
 
+// isTerminal reports whether r is a terminal.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
 type app struct {
+	stdin          io.Reader
 	stdout, stderr io.Writer
-	workspaceDir   string
+	// interactive reports whether stdin is a terminal, where a person can
+	// answer questions.
+	interactive bool
+	// interrupts delivers the interrupts after the first, which cancels
+	// the context.
+	interrupts   <-chan struct{}
+	workspaceDir string
 }
 
 func (a *app) rootCommand() *cobra.Command {
@@ -77,6 +101,8 @@ disk.`,
 		a.admitCommand(),
 		a.renderCommand(),
 		a.describeCommand(),
+		a.planCommand(),
+		a.applyCommand(),
 	)
 	return root
 }

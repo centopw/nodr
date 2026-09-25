@@ -48,6 +48,9 @@ has started. So far the repository contains:
 - **The `nodr` command line**, which validates a workspace, allocates VM
   IDs, nodes and addresses, renders engine code and shows who owns each
   field.
+- **Plan and apply with OpenTofu**: `nodr plan` compiles intent into the
+  state units below `terraform/`, writes the files that change and plans
+  each unit, and `nodr apply` applies the saved plans after confirmation.
 
 ## Try it
 
@@ -59,6 +62,17 @@ $ bin/nodr validate -w examples/homelab
 8 documents valid
 $ bin/nodr render -w examples/homelab vm/web-01
 $ bin/nodr describe -w examples/homelab vm/web-01 --ownership
+```
+
+`nodr plan` and `nodr apply` need [OpenTofu](https://opentofu.org/) 1.8 or
+later, as `tofu` on `PATH` or in `NODR_TOFU`, and a real cluster: the
+endpoints in the example are placeholders. With a workspace for your
+cluster:
+
+```console
+$ export PROXMOX_VE_API_TOKEN='user@pve!token=secret'
+$ bin/nodr plan -w <workspace>
+$ bin/nodr apply -w <workspace>
 ```
 
 The [homelab example](examples/homelab/README.md) explains the workspace.

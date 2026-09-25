@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,8 +21,13 @@ type result struct {
 }
 
 func run(args ...string) result {
+	return runWithStdin(strings.NewReader(""), args...)
+}
+
+// runWithStdin runs the command line with stdin as its standard input.
+func runWithStdin(stdin io.Reader, args ...string) result {
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), args, &stdout, &stderr)
+	code := Run(context.Background(), nil, args, stdin, &stdout, &stderr)
 	return result{stdout: stdout.String(), stderr: stderr.String(), code: code}
 }
 
@@ -480,6 +486,10 @@ func TestErrors(t *testing.T) {
 		{[]string{"render", "-w", example, "vm/ghost"}, exitError, "vm/ghost does not exist in the workspace"},
 		{[]string{"admit", "-w", example, "network/lan"}, exitUsage, "network/lan: only virtual machines are supported so far"},
 		{[]string{"admit", "-w", example, "vm/ghost", "--dry-run"}, exitError, "vm/ghost does not exist in the workspace"},
+		{[]string{"plan", "-w", example, "vm/web-01"}, exitUsage, `unexpected argument "vm/web-01"`},
+		// The form of apply that submits documents to a server does not
+		// exist yet.
+		{[]string{"apply", "-w", example, "-f", "intent"}, exitUsage, "unknown shorthand flag: 'f' in -f"},
 		{[]string{"validate", "--frobnicate"}, exitUsage, "unknown flag: --frobnicate"},
 		{[]string{"version", "extra"}, exitUsage, `unexpected argument "extra"`},
 	}

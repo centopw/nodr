@@ -183,7 +183,7 @@ Idempotency-Key: 8c2d4e6f-1a3b-4c5d-9e7f-a1b2c3d4e5f6
 | `nodr get <kind> [name] [-l selector] [-o table\|yaml\|json]` | List or show resources |
 | `nodr describe <kind>/<name> [--ownership]` | Status, conditions, field ownership, recent runs |
 | `nodr edit <kind>/<name>` | Edit intent in `$EDITOR` and submit it as a change set |
-| `nodr apply -f <path> [--auto-approve]` | Submit documents as a change set, plan it and apply after confirmation |
+| `nodr apply -f <path> [--auto-approve]` | Submit documents to the server as a change set, plan it and apply after confirmation |
 | `nodr changeset list\|plan\|approve\|apply <id>` | Work with change sets |
 | `nodr op <kind>/<name> <operation> [flags]` | Run an operation, for example `migrate --to pve3` |
 | `nodr run <workflow> [--param key=value]` | Start a workflow |
@@ -194,9 +194,27 @@ Idempotency-Key: 8c2d4e6f-1a3b-4c5d-9e7f-a1b2c3d4e5f6
 | `nodr forget <kind>/<name>` | Stop managing a resource without touching it |
 | `nodr sync --local`, `nodr validate` | Run sync and validation on a local clone |
 | `nodr admit [vm/<name>...] [--dry-run]` | Allocate UIDs, nodes, VM IDs and addresses in a local clone: the local counterpart of server-side admission ([§3.7](03-resource-model.md#37-admission)) |
+| `nodr plan [--unit <dir>]...` | Compile intent into OpenTofu code in a local clone, write the files that change, and plan each state unit with a local OpenTofu |
+| `nodr apply [--unit <dir>]... [--auto-approve] [--allow-destroy]` | Plan like `nodr plan`, ask for confirmation, and apply the saved plans with a local OpenTofu |
 | `nodr secret set\|list\|delete` | Manage secrets |
 | `nodr merge-driver <format>` | Structural Git merge driver ([§4.6](04-dual-mode-and-sync.md#46-provenance-and-three-way-regeneration)) |
 | `nodr plugin test` | Run the plugin conformance kit |
+
+**Local plan and apply.** `nodr plan` and `nodr apply` without `-f` need no
+server. They run OpenTofu on a local clone: the binary that `NODR_TOFU`
+names, or `tofu` on `PATH`, with the environment of the user, so provider
+credentials such as `PROXMOX_VE_API_TOKEN` come from there. Both compile
+intent and write the changed files before they plan, so the code in the
+clone is what OpenTofu plans, and the user commits it. A state unit is a
+directory right below `terraform/` that holds `.tf` files
+([§5.5](05-compiler-and-engines.md#55-engine-code-conventions)).
+`nodr apply` applies each unit's saved plan, never a new one. It asks for
+`yes` on a terminal unless `--auto-approve` is given, and it refuses plans
+that replace or destroy resources unless `--allow-destroy` is given, even
+with `--auto-approve`: the local counterpart of the approval rule for those
+impacts ([§10.4](10-security.md#104-authorization)). The server form,
+`nodr apply -f`, submits a change set instead, which the server plans and
+applies on runners after the workspace's approval rules pass.
 
 ```console
 $ nodr get vm -l app=website
@@ -209,6 +227,12 @@ FIELD                          OWNER       SOURCE
 spec.resources.cpu.cores       synced      terraform/pve-main-compute/vms.tf:14
 spec.resources.memory.size     synced      terraform/pve-main-compute/vms.tf:19
 smbios                         extension   terraform/pve-main-compute/vms.tf:31
+
+$ nodr plan 2>/dev/null
+wrote terraform/pve-main-compute/vms.tf
+terraform/pve-main-compute: 1 to add, 1 to change, 0 to replace, 0 to destroy
+  add      proxmox_virtual_environment_vm.web_02
+  change   proxmox_virtual_environment_vm.web_01
 ```
 
 ## 11.8 Integration surfaces
