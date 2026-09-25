@@ -1,0 +1,18 @@
+# Build output
+/bin/
+/dist/
+
+# Test and coverage output
+*.test
+coverage.out
+**/testdata/rapid/
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+
+# OpenTofu and Terraform working files in example workspaces
+.terraform/
+*.tfstate
+*.tfstate.*
