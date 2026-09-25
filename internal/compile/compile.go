@@ -33,11 +33,14 @@ import (
 // path, with their new content. It writes nothing itself, so callers can
 // show the changes before they call Write.
 //
-// VMs are compiled in name order. The managed block of a VM is updated in
-// place by the lens's Put, which changes only synced values, so code-owned
-// values, extensions and hand edits stay as they are. A VM without a
-// managed block gets a new one at the end of
-// terraform/<cluster>-compute/vms.tf. Every unit directory with managed
+// VMs are compiled in name order. The managed block of a VM, the
+// proxmox_virtual_environment_vm resource with a provenance comment that
+// names the VM, is updated in place by the lens's Put, which changes only
+// synced values, so code-owned values, extensions and hand edits stay as
+// they are. A resource without that comment is never changed, even if it
+// has the address of a VM. A VM without a managed block gets a new one at
+// the end of terraform/<cluster>-compute/vms.tf, unless that unit has a
+// resource with the VM's address already. Every unit directory with managed
 // blocks gets versions.tf and providers.tf if it lacks them; files that
 // exist are never overwritten. A managed block whose VM is not in intent
 // stays and gets a warning.
@@ -94,6 +97,15 @@ func (c *compiler) scan() bool {
 	err := fs.WalkDir(c.ws.FS, terraformDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		// Like OpenTofu, skip hidden files, such as the lock files of
+		// editors, and hidden directories, such as .terraform, where
+		// OpenTofu keeps the modules it downloads.
+		if strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() || path.Ext(p) != ".tf" {
 			return nil
@@ -161,34 +173,62 @@ func (c *compiler) virtualMachines() []*v1alpha1.VirtualMachine {
 // block to the unit of its cluster.
 func (c *compiler) compileVM(vm *v1alpha1.VirtualMachine) {
 	name, cluster := vm.Metadata.Name, vm.Spec.Placement.Cluster
-	file, src, err := proxmoxvm.FindManaged(c.ws.FS, terraformDir, name)
-	switch {
-	case errors.Is(err, proxmoxvm.ErrNotManaged):
+	file, ok := c.managedFile(name)
+	if !ok {
+		dir := unitDir(cluster)
+		if other := c.unmanagedBlock(dir, name); other != "" {
+			c.diags.Errorf(other, 0, "", "cannot add a managed block for vm/%s: the unit has a resource %s.%s that nodr does not manage; add the comment '# %s' above it to let nodr manage it, or rename it", name, proxmoxvm.ResourceType, proxmoxvm.Address(name), proxmoxvm.Marker(name))
+			return
+		}
 		block, err := c.lens.Render(vm)
 		if err != nil {
 			c.lensError(vm, "", err)
 			return
 		}
-		dir := unitDir(cluster)
 		file = path.Join(dir, vmsFile)
 		c.files[file] = appendBlock(c.files[file], block)
 		c.addUnit(dir, cluster)
-	case err != nil:
-		c.diags.Errorf(terraformDir, 0, "", "find the managed block of vm/%s: %v", name, err)
-	default:
-		c.addUnit(path.Dir(file), cluster)
-		// FindManaged reads the disk, and a VM compiled earlier may have
-		// changed the file already.
-		if current, ok := c.files[file]; ok {
-			src = current
-		}
-		out, err := c.lens.Put(vm, src, file)
-		if err != nil {
-			c.lensError(vm, file, err)
-			return
-		}
-		c.files[file] = out
+		return
 	}
+	c.addUnit(path.Dir(file), cluster)
+	// A VM compiled earlier may have changed the file already.
+	out, err := c.lens.Put(vm, c.files[file], file)
+	if err != nil {
+		c.lensError(vm, file, err)
+		return
+	}
+	c.files[file] = out
+}
+
+// managedFile returns the first file, in path order, with the managed block
+// of the VM called name. Only a block with a provenance comment is managed:
+// a block that merely has the VM's address is code that nodr does not own,
+// wherever it is.
+func (c *compiler) managedFile(name string) (string, bool) {
+	for _, file := range slices.Sorted(maps.Keys(c.blocks)) {
+		for _, b := range c.blocks[file] {
+			if b.Name == name {
+				return file, true
+			}
+		}
+	}
+	return "", false
+}
+
+// unmanagedBlock returns the file right in the unit in dir that has a
+// resource with the address of the VM called name, or "" if there is none.
+// The VM has no managed block, so such a resource is code that nodr does not
+// own, and a new block with the same address would clash with it.
+func (c *compiler) unmanagedBlock(dir, name string) string {
+	for _, file := range slices.Sorted(maps.Keys(c.files)) {
+		if path.Dir(file) != dir {
+			continue
+		}
+		if _, err := proxmoxvm.Locate(c.files[file], file, name); err == nil {
+			return file
+		}
+	}
+	return ""
 }
 
 // lensError reports why the lens cannot write vm. file is the file with the

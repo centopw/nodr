@@ -346,6 +346,40 @@ func TestManagedBlockWithoutIntent(t *testing.T) {
 	checkFiles(t, files, nil)
 }
 
+// TestUnmanagedBlockWithTheAddress checks that a resource without a
+// provenance comment is not taken for the managed block of a VM, although it
+// has the VM's address.
+func TestUnmanagedBlockWithTheAddress(t *testing.T) {
+	t.Run("in another unit", func(t *testing.T) {
+		root := copyExample(t)
+		// A unit written by hand, sorted before the unit of web-01.
+		writeFile(t, root, "terraform/legacy/main.tf", `resource "proxmox_virtual_environment_vm" "web_01" {
+  name      = "legacy-web"
+  node_name = "pve9"
+  vm_id     = 500
+}
+`)
+		edit(t, root, "intent/compute/web-01.yaml", "memory: { size: 8Gi }", "memory: { size: 16Gi }")
+		code := readFile(t, root, vmsPath)
+		ws := load(t, root)
+		files, diags := Compile(ws)
+		checkDiags(t, diags)
+		// Only the managed block changes, and the other unit gets no files.
+		checkFiles(t, files, map[string]string{
+			vmsPath: strings.Replace(code, "dedicated = 8192", "dedicated = 16384", 1),
+		})
+		checkInSync(t, root, ws, files)
+	})
+
+	t.Run("in the unit of the VM", func(t *testing.T) {
+		root := copyExample(t)
+		edit(t, root, vmsPath, "# nodr:managed vm/web-01\n", "")
+		files, diags := Compile(load(t, root))
+		checkDiags(t, diags, "terraform/pve-main-compute/vms.tf: error: cannot add a managed block for vm/web-01: the unit has a resource proxmox_virtual_environment_vm.web_01 that nodr does not manage; add the comment '# nodr:managed vm/web-01' above it to let nodr manage it, or rename it")
+		checkFiles(t, files, nil)
+	})
+}
+
 func TestConflict(t *testing.T) {
 	root := copyExample(t)
 	// A second disk of dns-01, added in code with an attribute that nodr
@@ -379,6 +413,19 @@ func TestSyntaxError(t *testing.T) {
 	files, diags := Compile(load(t, root))
 	// The broken file could hold managed blocks, so nothing changes.
 	checkDiags(t, diags, "terraform/pve-main-compute/broken.tf:2: error: invalid HCL: Invalid expression; Expected the start of an expression, but found an invalid expression token.")
+	checkFiles(t, files, nil)
+}
+
+// TestHiddenFiles checks that Compile skips what OpenTofu skips: hidden
+// files, such as the lock files of editors, and hidden directories, such
+// as .terraform, which holds the modules that OpenTofu downloads.
+func TestHiddenFiles(t *testing.T) {
+	root := copyExample(t)
+	const invalid = "variable \"x\" {\n  default =\n}\n"
+	writeFile(t, root, "terraform/pve-main-compute/.#vms.tf", invalid)
+	writeFile(t, root, "terraform/pve-main-compute/.terraform/modules/net/main.tf", invalid)
+	files, diags := Compile(load(t, root))
+	checkDiags(t, diags)
 	checkFiles(t, files, nil)
 }
 
