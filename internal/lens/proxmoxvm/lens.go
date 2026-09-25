@@ -202,6 +202,34 @@ func FindManaged(fsys fs.FS, dir, name string) (string, []byte, error) {
 	return found, content, nil
 }
 
+// ManagedBlock is a managed block in a file.
+type ManagedBlock struct {
+	// Name is the name of the VM that the provenance comment names.
+	Name string
+	// Line is the 1-based line where the resource starts.
+	Line int
+}
+
+// ManagedBlocks returns the managed blocks in src, in file order: the
+// proxmox_virtual_environment_vm resources with a provenance comment.
+func ManagedBlocks(src []byte, filename string) ([]ManagedBlock, error) {
+	file, diags := hclsyntax.ParseConfig(src, filename, hcl.InitialPos)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("parse %s: %w", filename, diags)
+	}
+	lines := strings.Split(string(src), "\n")
+	var out []ManagedBlock
+	for _, b := range file.Body.(*hclsyntax.Body).Blocks {
+		if b.Type != "resource" || len(b.Labels) != 2 || b.Labels[0] != ResourceType {
+			continue
+		}
+		if name := markerAbove(lines, b.TypeRange.Start.Line); name != "" {
+			out = append(out, ManagedBlock{Name: name, Line: b.TypeRange.Start.Line})
+		}
+	}
+	return out, nil
+}
+
 // intentPaths maps code paths of the view to intent paths. Indices are
 // written as [*] and carried over in order.
 var intentPaths = map[string]string{

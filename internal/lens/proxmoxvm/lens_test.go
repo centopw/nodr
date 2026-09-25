@@ -260,6 +260,18 @@ func TestLocate(t *testing.T) {
 	}
 }
 
+func TestManagedBlocks(t *testing.T) {
+	l, vm := fixture(t)
+	src := "# Owned by the team.\nresource \"proxmox_virtual_environment_vm\" \"mine\" {\n}\n\n" + render(t, l, vm)
+	blocks, err := ManagedBlocks([]byte(src), "vms.tf")
+	if want := []ManagedBlock{{Name: "web-01", Line: 6}}; err != nil || !reflect.DeepEqual(blocks, want) {
+		t.Errorf("ManagedBlocks = %+v, %v; want %+v", blocks, err, want)
+	}
+	if _, err := ManagedBlocks([]byte("resource {"), "vms.tf"); err == nil {
+		t.Error("ManagedBlocks of invalid HCL: no error")
+	}
+}
+
 func TestAddress(t *testing.T) {
 	for name, want := range map[string]string{"web-01": "web_01", "db": "db", "01-web": "vm_01_web"} {
 		if got := Address(name); got != want {
