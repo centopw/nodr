@@ -226,8 +226,11 @@ before it is committed:
 3. **Validation.** Schema checks and CEL rules run first, then semantic checks
    contributed by plugins, which use inventory facts: node capacity, name
    collisions on the cluster, VLANs that exist on the bridge, IP conflicts,
-   HA readiness. Findings are *errors* (block), *warnings* (allowed after
-   acknowledgment) or *info*.
+   HA readiness. Values that must be unique are also compared across the
+   intent documents, because values written by hand skip allocation: VM IDs
+   within a cluster, IPv4 addresses within a network and MAC addresses
+   within a cluster. Findings are *errors* (block), *warnings* (allowed
+   after acknowledgment) or *info*.
 4. **Policy.** Optional, workspace-defined CEL rule packs such as "production
    VMs need a backup policy" or "LXC containers must be unprivileged". Each
    rule can deny, warn or require approval.

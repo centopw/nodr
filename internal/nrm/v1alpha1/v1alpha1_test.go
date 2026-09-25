@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"reflect"
@@ -291,6 +292,183 @@ spec:
 			}
 			got := r.Validate(append(append([]*nrm.Document{}, base...), docs...))
 			assertDiags(t, got, tt.want)
+		})
+	}
+}
+
+// vm returns a VirtualMachine document on a cluster. The lines of spec
+// follow from line 7 on.
+func vm(name, cluster string, spec ...string) string {
+	return "apiVersion: nodr/v1alpha1\nkind: VirtualMachine\nmetadata: { name: " + name + " }\nspec:\n" +
+		"  placement: { cluster: " + cluster + " }\n" +
+		"  resources: { cpu: { cores: 1 }, memory: { size: 1Gi } }\n" +
+		"  " + strings.Join(spec, "\n  ") + "\n"
+}
+
+// template returns a Template document of a cluster with a guest ID on
+// line 8.
+func template(name, cluster string, vmid int) string {
+	return fmt.Sprintf(`apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: %s }
+spec:
+  cluster: %s
+  image: { url: https://example.com/image.qcow2, checksum: "sha256:%s" }
+  storage: local-lvm
+  identity: { vmid: %d }
+`, name, cluster, strings.Repeat("0", 64), vmid)
+}
+
+// Documents that the tests of unique values add to valid.yaml, which has
+// the cluster pve-main with the endpoints 10.0.10.11 and 10.0.10.12, the
+// network dmz, the template debian-12-cloud with guest ID 9001, and web-01
+// with guest ID 1012 and an interface on dmz with 10.0.20.21 and
+// BC:24:11:3A:5E:01.
+const (
+	labCluster = `apiVersion: nodr/v1alpha1
+kind: ProxmoxCluster
+metadata: { name: pve-lab }
+spec:
+  endpoints: [https://10.0.40.11:8006, https://pve-lab.home.arpa:8006]
+  credentialsRef: proxmox/pve-lab-token
+`
+	lanNetwork = `apiVersion: nodr/v1alpha1
+kind: Network
+metadata: { name: lan }
+spec:
+  ipv4: { subnet: 10.0.10.0/24 }
+`
+	// labNetwork is a separate network that reuses the subnet of dmz.
+	labNetwork = `apiVersion: nodr/v1alpha1
+kind: Network
+metadata: { name: lab }
+spec:
+  vlan: 40
+  ipv4: { subnet: 10.0.20.0/24 }
+`
+)
+
+func TestUniqueValues(t *testing.T) {
+	r := registry(t)
+	base := loadTestdata(t, "valid.yaml")
+	tests := []struct {
+		name string
+		// docs are added after valid.yaml, each in a file named after
+		// the resource.
+		docs []string
+		want []string
+	}{
+		{
+			name: "guest IDs within a cluster",
+			docs: []string{
+				vm("web-03", "pve-main", "identity: { vmid: 1012 }"),
+				vm("web-04", "pve-main", "identity: { vmid: 1012 }"),
+				vm("web-05", "pve-main", "identity: { vmid: 1013 }"),
+			},
+			want: []string{
+				`web-03.yaml:7: error: spec.identity.vmid: guest ID 1012 is used twice in cluster "pve-main"; it is also used by VirtualMachine/web-01 at valid.yaml:78`,
+				`web-04.yaml:7: error: spec.identity.vmid: guest ID 1012 is used twice in cluster "pve-main"; it is also used by VirtualMachine/web-01 at valid.yaml:78`,
+			},
+		},
+		{
+			name: "templates and virtual machines share guest IDs",
+			docs: []string{
+				vm("web-03", "pve-main", "identity: { vmid: 9001 }"),
+				template("debian-13-cloud", "pve-main", 1012),
+			},
+			want: []string{
+				`web-03.yaml:7: error: spec.identity.vmid: guest ID 9001 is used twice in cluster "pve-main"; it is also used by Template/debian-12-cloud at valid.yaml:52`,
+				`debian-13-cloud.yaml:8: error: spec.identity.vmid: guest ID 1012 is used twice in cluster "pve-main"; it is also used by VirtualMachine/web-01 at valid.yaml:78`,
+			},
+		},
+		{
+			name: "the same guest IDs in another cluster",
+			docs: []string{
+				labCluster,
+				vm("lab-01", "pve-lab", "identity: { vmid: 1012 }"),
+				template("debian-12-lab", "pve-lab", 9001),
+			},
+		},
+		{
+			name: "addresses within a network, whatever the prefix length",
+			docs: []string{
+				labNetwork,
+				vm("web-03", "pve-main",
+					"nics:",
+					"  - { network: dmz, ipv4: { mode: static, address: 10.0.20.21/25 } }",
+					"  - { network: lab, ipv4: { mode: static, address: 10.0.20.30/24 } }",
+					"  - { network: lab, ipv4: { mode: static, address: 10.0.20.30/24 } }"),
+			},
+			want: []string{
+				`web-03.yaml:8: error: spec.nics[0].ipv4.address: address 10.0.20.21 is used twice in network "dmz"; it is also used by VirtualMachine/web-01 at valid.yaml:92`,
+				`web-03.yaml:10: error: spec.nics[2].ipv4.address: address 10.0.20.30 is used twice in network "lab"; it is also used by VirtualMachine/web-03 at web-03.yaml:9`,
+			},
+		},
+		{
+			name: "the same address in another network",
+			docs: []string{
+				labNetwork,
+				vm("lab-01", "pve-main", "nics: [{ network: lab, ipv4: { mode: static, address: 10.0.20.21/24 } }]"),
+			},
+		},
+		{
+			name: "addresses of the endpoints of the cluster",
+			docs: []string{
+				lanNetwork,
+				vm("web-03", "pve-main", "nics: [{ network: lan, ipv4: { mode: static, address: 10.0.10.12/24 } }]"),
+			},
+			want: []string{
+				`web-03.yaml:7: error: spec.nics[0].ipv4.address: address 10.0.10.12 is used twice; it is also used by an endpoint of ProxmoxCluster/pve-main at valid.yaml:10`,
+			},
+		},
+		{
+			name: "addresses of the endpoints of another cluster",
+			docs: []string{
+				labCluster,
+				lanNetwork,
+				vm("lab-01", "pve-lab", "nics: [{ network: lan, ipv4: { mode: static, address: 10.0.10.11/24 } }]"),
+			},
+		},
+		{
+			name: "MAC addresses within a cluster, whatever the case",
+			docs: []string{
+				labCluster,
+				vm("web-03", "pve-main", "nics: [{ network: dmz, mac: bc:24:11:3a:5e:01 }]"),
+				vm("lab-01", "pve-lab", "nics: [{ network: dmz, mac: BC:24:11:3A:5E:01 }]"),
+			},
+			want: []string{
+				`web-03.yaml:7: error: spec.nics[0].mac: MAC address bc:24:11:3a:5e:01 is used twice in cluster "pve-main"; it is also used by VirtualMachine/web-01 at valid.yaml:91`,
+			},
+		},
+		{
+			// The invalid power state does not stop the documents from
+			// decoding, so only the schema keeps them out.
+			name: "only documents that pass their schema",
+			docs: []string{
+				vm("web-03", "pve-main", "identity: { vmid: 1012 }",
+					"nics: [{ network: dmz, mac: BC:24:11:3A:5E:01, ipv4: { mode: static, address: 10.0.20.21/24 } }]",
+					"lifecycle: { powerState: paused }"),
+				vm("web-04", "pve-main", "identity: { vmid: 1100 }", "lifecycle: { powerState: paused }"),
+				vm("web-05", "pve-main", "identity: { vmid: 1100 }"),
+			},
+			want: []string{
+				"web-03.yaml:9: error: spec.lifecycle.powerState: value must be one of 'running', 'stopped', 'unmanaged'",
+				"web-04.yaml:8: error: spec.lifecycle.powerState: value must be one of 'running', 'stopped', 'unmanaged'",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docs := append([]*nrm.Document{}, base...)
+			for _, src := range tt.docs {
+				parsed, diags := nrm.Parse("new.yaml", []byte(src))
+				if diags.HasErrors() || len(parsed) != 1 {
+					t.Fatalf("parse: %v (%d documents)", diags.Err(), len(parsed))
+				}
+				parsed[0].File = parsed[0].Metadata.Name + ".yaml"
+				docs = append(docs, parsed[0])
+			}
+			assertDiags(t, r.Validate(docs), tt.want)
 		})
 	}
 }

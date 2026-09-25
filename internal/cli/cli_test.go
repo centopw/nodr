@@ -123,6 +123,83 @@ intent/compute/vm.yaml:6: error: spec.resources.memory: missing required field
 	}
 }
 
+func TestValidateReportsDuplicates(t *testing.T) {
+	root := writeWorkspace(t, map[string]string{
+		"nodr.yaml": manifest,
+		"intent/platform/pve.yaml": `apiVersion: nodr/v1alpha1
+kind: ProxmoxCluster
+metadata: { name: pve-main }
+spec:
+  endpoints: [https://10.0.10.11:8006]
+  credentialsRef: proxmox/pve-main-token
+---
+apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: debian }
+spec:
+  cluster: pve-main
+  image: { url: https://example.com/debian.qcow2, checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  storage: local-lvm
+  identity: { vmid: 9000 }
+`,
+		"intent/network/lan.yaml": `apiVersion: nodr/v1alpha1
+kind: Network
+metadata: { name: lan }
+spec:
+  ipv4: { subnet: 10.0.10.0/24 }
+`,
+		"intent/compute/a.yaml": `apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata: { name: a }
+spec:
+  placement: { cluster: pve-main }
+  identity: { vmid: 1000 }
+  resources: { cpu: { cores: 1 }, memory: { size: 1Gi } }
+  nics:
+    - network: lan
+      mac: BC:24:11:00:00:01
+      ipv4: { mode: static, address: 10.0.10.21/24 }
+`,
+		"intent/compute/b.yaml": `apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata: { name: b }
+spec:
+  placement: { cluster: pve-main }
+  identity: { vmid: 1000 }
+  resources: { cpu: { cores: 1 }, memory: { size: 1Gi } }
+  nics:
+    - network: lan
+      mac: bc:24:11:00:00:01
+      ipv4: { mode: static, address: 10.0.10.21/25 }
+    - network: lan
+      ipv4: { mode: static, address: 10.0.10.11/24 }
+`,
+		"intent/compute/c.yaml": `apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata: { name: c }
+spec:
+  placement: { cluster: pve-main }
+  identity: { vmid: 9000 }
+  resources: { cpu: { cores: 1 }, memory: { size: 1Gi } }
+`,
+	})
+	r := run("validate", "-w", root)
+	r.check(t, exitError)
+	// Each value is reported where it is used again, in file order, so
+	// the template in intent/platform comes after the VM that uses its
+	// guest ID. An endpoint always comes first.
+	want := `intent/compute/b.yaml:6: error: spec.identity.vmid: guest ID 1000 is used twice in cluster "pve-main"; it is also used by VirtualMachine/a at intent/compute/a.yaml:6
+intent/compute/b.yaml:10: error: spec.nics[0].mac: MAC address bc:24:11:00:00:01 is used twice in cluster "pve-main"; it is also used by VirtualMachine/a at intent/compute/a.yaml:10
+intent/compute/b.yaml:11: error: spec.nics[0].ipv4.address: address 10.0.10.21 is used twice in network "lan"; it is also used by VirtualMachine/a at intent/compute/a.yaml:11
+intent/compute/b.yaml:13: error: spec.nics[1].ipv4.address: address 10.0.10.11 is used twice; it is also used by an endpoint of ProxmoxCluster/pve-main at intent/platform/pve.yaml:5
+intent/platform/pve.yaml:15: error: spec.identity.vmid: guest ID 9000 is used twice in cluster "pve-main"; it is also used by VirtualMachine/c at intent/compute/c.yaml:6
+5 errors, 0 warnings in 6 documents
+`
+	if r.stderr != want || r.stdout != "" {
+		t.Errorf("stderr =\n%s\nwant\n%s\nstdout = %q", r.stderr, want, r.stdout)
+	}
+}
+
 func TestValidateFindsTheWorkspace(t *testing.T) {
 	root := writeWorkspace(t, map[string]string{"nodr.yaml": manifest, "intent/compute/.keep": ""})
 	t.Chdir(filepath.Join(root, "intent", "compute"))

@@ -47,6 +47,11 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   would add, change, replace and destroy, and `nodr apply`, which then
   applies the saved plans after confirmation. Plans that replace or
   destroy resources need `--allow-destroy`, even with `--auto-approve`.
+- `nodr validate` reports values that must be unique but are used more
+  than once: guest IDs of virtual machines and templates within a
+  cluster, IPv4 addresses of network interfaces within a network or
+  shared with an endpoint of the guest's cluster, and MAC addresses
+  within a cluster.
 - A contributor guide covering setup, repository layout, tests and Git
   conventions, and continuous integration that builds, tests, lints and
   validates the example code on every change.

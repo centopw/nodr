@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -178,6 +179,149 @@ func checkTemplate(d *nrm.Document, diags *diag.List) {
 	if len(sum) != want {
 		checker{d: d, diags: diags}.errorf(fieldPath("spec", "image", "checksum"), "a %s checksum has %d hexadecimal digits, not %d", algo, want, len(sum))
 	}
+}
+
+// occurrence is a field of a document that holds a value that must be
+// unique.
+type occurrence struct {
+	d    *nrm.Document
+	path []string
+}
+
+// String formats the occurrence for messages, for example
+// "VirtualMachine/web-01 at intent/compute/web-01.yaml:17".
+func (o occurrence) String() string {
+	return fmt.Sprintf("%s at %s:%d", o.d.Ref(), o.d.File, o.d.LineOf(o.path...))
+}
+
+// checkUnique reports values that must be unique but are used more than
+// once: the guest IDs of virtual machines and templates within a cluster,
+// the IPv4 addresses of network interfaces within a network, ignoring the
+// prefix length, and their MAC addresses within a cluster, ignoring case.
+// It also reports interface addresses that an endpoint of the guest's
+// cluster uses. A value is reported at every occurrence after the first,
+// and the message points to the first.
+func checkUnique(docs []*nrm.Document, diags *diag.List) {
+	type (
+		clusterID struct {
+			cluster string
+			id      int
+		}
+		networkAddr struct {
+			network string
+			addr    netip.Addr
+		}
+		clusterMAC struct {
+			cluster, mac string
+		}
+	)
+	ids := map[clusterID]occurrence{}
+	addrs := map[networkAddr]occurrence{}
+	macs := map[clusterMAC]occurrence{}
+	endpoints := endpointAddresses(docs)
+	for _, d := range docs {
+		if d.APIVersion != APIVersion {
+			continue
+		}
+		var (
+			cluster string
+			vmid    int
+			nics    []NIC
+		)
+		switch d.Kind {
+		case KindTemplate:
+			t, err := Decode[TemplateSpec](d)
+			if err != nil {
+				continue
+			}
+			cluster, vmid = t.Spec.Cluster, t.Spec.Identity.VMID
+		case KindVirtualMachine:
+			vm, err := Decode[VirtualMachineSpec](d)
+			if err != nil {
+				continue
+			}
+			cluster, vmid, nics = vm.Spec.Placement.Cluster, vm.Spec.Identity.VMID, vm.Spec.NICs
+		default:
+			continue
+		}
+		c := checker{d: d, diags: diags}
+		if vmid != 0 {
+			p := fieldPath("spec", "identity", "vmid")
+			key := clusterID{cluster, vmid}
+			if first, dup := ids[key]; dup {
+				c.errorf(p, "guest ID %d is used twice in cluster %q; it is also used by %s", vmid, cluster, first)
+			} else {
+				ids[key] = occurrence{d, p}
+			}
+		}
+		for i, nic := range nics {
+			if nic.MAC != "" {
+				p := fieldPath("spec", "nics", i, "mac")
+				key := clusterMAC{cluster, strings.ToUpper(nic.MAC)}
+				if first, dup := macs[key]; dup {
+					c.errorf(p, "MAC address %s is used twice in cluster %q; it is also used by %s", nic.MAC, cluster, first)
+				} else {
+					macs[key] = occurrence{d, p}
+				}
+			}
+			if nic.IPv4 == nil {
+				continue
+			}
+			prefix, err := netip.ParsePrefix(nic.IPv4.Address)
+			if err != nil {
+				// No address, or an invalid one, which checkVirtualMachine
+				// reports.
+				continue
+			}
+			addr := prefix.Addr()
+			p := fieldPath("spec", "nics", i, "ipv4", "address")
+			key := networkAddr{nic.Network, addr}
+			if first, dup := addrs[key]; dup {
+				c.errorf(p, "address %s is used twice in network %q; it is also used by %s", addr, nic.Network, first)
+			} else {
+				addrs[key] = occurrence{d, p}
+			}
+			if endpoint, used := endpoints[cluster][addr]; used {
+				c.errorf(p, "address %s is used twice; it is also used by an endpoint of %s", addr, endpoint)
+			}
+		}
+	}
+}
+
+// endpointAddresses returns the IP addresses of the endpoints of each
+// cluster, by cluster name, with the first endpoint that uses each.
+// Endpoints given by host name are left out.
+func endpointAddresses(docs []*nrm.Document) map[string]map[netip.Addr]occurrence {
+	out := map[string]map[netip.Addr]occurrence{}
+	for _, d := range docs {
+		if d.APIVersion != APIVersion || d.Kind != KindProxmoxCluster {
+			continue
+		}
+		c, err := Decode[ProxmoxClusterSpec](d)
+		if err != nil {
+			continue
+		}
+		if _, dup := out[c.Metadata.Name]; dup {
+			// The cluster is defined twice, which Validate reports.
+			continue
+		}
+		addrs := map[netip.Addr]occurrence{}
+		for i, e := range c.Spec.Endpoints {
+			u, err := url.Parse(e)
+			if err != nil {
+				continue
+			}
+			addr, err := netip.ParseAddr(u.Hostname())
+			if err != nil {
+				continue
+			}
+			if _, dup := addrs[addr]; !dup {
+				addrs[addr] = occurrence{d, fieldPath("spec", "endpoints", i)}
+			}
+		}
+		out[c.Metadata.Name] = addrs
+	}
+	return out
 }
 
 // addrRange is an inclusive range of IPv4 addresses.
