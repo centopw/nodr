@@ -45,6 +45,8 @@ type KindInfo struct {
 	// Check runs semantic checks that a schema cannot express, such as
 	// unique names within a list or addresses inside a subnet. It runs
 	// only for documents that pass schema validation, and may be nil.
+	// Checks that compare several documents are added with
+	// Registry.AddCheck.
 	Check func(*Document, *diag.List)
 }
 
@@ -57,11 +59,13 @@ type FieldRef struct {
 }
 
 // Registry holds the kinds nodr understands and validates documents against
-// them. It is safe for concurrent use once all kinds are registered.
+// them. It is safe for concurrent use once all kinds are registered and all
+// checks added.
 type Registry struct {
 	mu       sync.Mutex
 	kinds    map[string]*KindInfo // key: apiVersion + " " + kind
 	byName   map[string]*KindInfo // key: kind, lowercase kind or short name
+	checks   []func([]*Document, *diag.List)
 	compiler *jsonschema.Compiler
 	compiled map[string]*jsonschema.Schema
 }
@@ -128,6 +132,16 @@ func (r *Registry) Register(k KindInfo) error {
 		}
 	}
 	return nil
+}
+
+// AddCheck adds a check that compares intent documents with each other,
+// for example for values that must be unique across documents. Validate
+// runs it once with every document that passes schema validation, in the
+// order Validate got them, and the check reports problems in diags.
+func (r *Registry) AddCheck(check func(docs []*Document, diags *diag.List)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checks = append(r.checks, check)
 }
 
 // Lookup returns the kind registered for apiVersion and kind.
@@ -213,13 +227,16 @@ func (r *Registry) validateContent(k *KindInfo, d *Document, diags *diag.List) b
 }
 
 // Validate checks intent documents: registered kinds, metadata, schemas,
-// unique names and UIDs, and references between the documents.
-// References to kinds that are not registered are not checked.
+// the checks of each kind and those added with AddCheck, unique names and
+// UIDs, and references between the documents. References to kinds that
+// are not registered are not checked.
 func (r *Registry) Validate(docs []*Document) diag.List {
 	var diags diag.List
 	byRef := map[Ref]*Document{}
 	byUID := map[string]*Document{}
-	var valid []*Document
+	// known holds the documents of registered kinds, and valid those of
+	// them that also pass schema validation.
+	var known, valid []*Document
 	for _, d := range docs {
 		k, ok := r.checkKind(d, &diags)
 		if !ok {
@@ -229,10 +246,13 @@ func (r *Registry) Validate(docs []*Document) diag.List {
 			diags.Errorf(d.File, d.Line, "kind", "%s documents belong in nodr.yaml, not among intent documents", d.Kind)
 			continue
 		}
-		if r.validateContent(k, d, &diags) && k.Check != nil {
-			k.Check(d, &diags)
+		if r.validateContent(k, d, &diags) {
+			valid = append(valid, d)
+			if k.Check != nil {
+				k.Check(d, &diags)
+			}
 		}
-		valid = append(valid, d)
+		known = append(known, d)
 
 		ref := d.Ref()
 		if first, dup := byRef[ref]; dup {
@@ -248,7 +268,13 @@ func (r *Registry) Validate(docs []*Document) diag.List {
 			}
 		}
 	}
-	for _, d := range valid {
+	r.mu.Lock()
+	checks := r.checks
+	r.mu.Unlock()
+	for _, check := range checks {
+		check(valid, &diags)
+	}
+	for _, d := range known {
 		k, _ := r.Lookup(d.APIVersion, d.Kind)
 		if k.References == nil {
 			continue

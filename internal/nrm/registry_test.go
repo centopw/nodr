@@ -1,6 +1,7 @@
 package nrm
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -193,6 +194,43 @@ func TestValidateRunsChecksOnlyAfterSchemaPasses(t *testing.T) {
 	if got.Count(diag.Warning) != 1 {
 		t.Errorf("check ran %d times, want once: %v", got.Count(diag.Warning), got)
 	}
+}
+
+func TestValidateRunsAddedChecksOnValidDocuments(t *testing.T) {
+	r := newTestRegistry(t)
+	var runs []string
+	r.AddCheck(func(docs []*Document, diags *diag.List) {
+		names := make([]string, len(docs))
+		for i, d := range docs {
+			names[i] = d.Metadata.Name
+		}
+		runs = append(runs, strings.Join(names, " "))
+		if n := len(docs); n > 1 {
+			last := docs[n-1]
+			diags.Errorf(last.File, last.Line, "", "%s comes after %s", last.Metadata.Name, docs[0].Metadata.Name)
+		}
+	})
+	docs := []*Document{
+		parseOne(t, widget("b", "  size: 1\n")),
+		parseOne(t, widget("invalid", "  size: 0\n")),
+		parseOne(t, "apiVersion: test/v1\nkind: Config\nmetadata:\n  name: manifest\n"),
+		parseOne(t, "apiVersion: test/v2\nkind: Widget\nmetadata:\n  name: unknown\n"),
+		parseOne(t, widget("a", "  size: 2\n")),
+	}
+	docs[1].File = "intent/invalid.yaml"
+	docs[4].File = "intent/a.yaml"
+	got := r.Validate(docs)
+	// The check runs once, with the documents that pass schema
+	// validation, in their order.
+	if want := []string{"b a"}; !slices.Equal(runs, want) {
+		t.Errorf("the check ran with %q, want %q", runs, want)
+	}
+	assertDiags(t, got, []string{
+		"intent/a.yaml:1: error: a comes after b",
+		"intent/invalid.yaml:6: error: spec.size: minimum: got 0, want 1",
+		"intent/test.yaml:1: error: kind: Config documents belong in nodr.yaml, not among intent documents",
+		"intent/test.yaml:2: error: kind: unknown kind Widget in API version test/v2",
+	})
 }
 
 func TestValidateManifest(t *testing.T) {

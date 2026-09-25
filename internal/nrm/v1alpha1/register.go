@@ -21,7 +21,7 @@ func Schemas() fs.FS {
 	return sub
 }
 
-// Register adds the kinds of this API version to r.
+// Register adds the kinds of this API version and their checks to r.
 func Register(r *nrm.Registry) error {
 	if err := r.AddSchemas(APIVersion, Schemas()); err != nil {
 		return err
@@ -40,6 +40,7 @@ func Register(r *nrm.Registry) error {
 			return err
 		}
 	}
+	r.AddCheck(checkUnique)
 	return nil
 }
 
