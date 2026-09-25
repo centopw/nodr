@@ -1,0 +1,7 @@
+apiVersion: nodr/v1alpha1
+kind: SSHKey
+metadata:
+  name: ops-team
+spec:
+  publicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHmVxYkT0dG9lbjpvcHMtdGVhbS1leGFtcGxl ops@example
+  description: Shared key of the operations team

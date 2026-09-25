@@ -1,0 +1,15 @@
+apiVersion: nodr/v1alpha1
+kind: Template
+metadata:
+  name: debian-12-cloud
+spec:
+  cluster: pve-main
+  node: pve1
+  image:
+    url: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+    # Placeholder: pin a dated image and copy its checksum from the
+    # SHA512SUMS file published next to it.
+    checksum: sha512:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  os: { family: debian, version: "12" }
+  storage: local-lvm
+  identity: { vmid: 9001 }

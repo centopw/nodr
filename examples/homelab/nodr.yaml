@@ -1,0 +1,16 @@
+# The workspace manifest (docs/design/03-resource-model.md, section 3.12).
+apiVersion: nodr/v1alpha1
+kind: Workspace
+metadata:
+  name: homelab
+spec:
+  environments:
+    prod: { vmidRange: [1000, 1999] }
+    lab: { vmidRange: [2000, 2999] }
+    templates: { vmidRange: [9000, 9099] }
+  engines:
+    opentofu: { version: ">= 1.8, < 2.0" }
+  bindings:
+    VirtualMachine/provision: opentofu
+  stateUnits:
+    strategy: per-cluster-and-environment
