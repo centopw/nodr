@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Metadata",
+  "description": "Metadata that every nodr document has.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name"],
+  "properties": {
+    "name": {
+      "$ref": "common.json#/$defs/name",
+      "description": "The resource name, unique per kind in the workspace. Renaming is allowed.",
+      "x-nodr-tier": "basic"
+    },
+    "uid": {
+      "type": "string",
+      "description": "The identity nodr assigns when the resource is created. It survives renames and must not be edited.",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "x-nodr-allocated": true,
+      "x-nodr-immutable": true,
+      "x-nodr-tier": "expert"
+    },
+    "labels": {
+      "type": "object",
+      "description": "Key-value pairs used by selectors in policies, schedules, bindings and access rules. The nodr/ prefix is reserved.",
+      "additionalProperties": { "type": "string", "maxLength": 63 },
+      "x-nodr-tier": "standard"
+    },
+    "annotations": {
+      "type": "object",
+      "description": "Free-form metadata. The nodr/ prefix is reserved.",
+      "additionalProperties": { "type": "string" },
+      "x-nodr-tier": "expert"
+    }
+  }
+}

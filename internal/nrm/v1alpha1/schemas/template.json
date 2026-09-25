@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Template",
+  "description": "A VM template built from a cloud image.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "nodr/v1alpha1" },
+    "kind": { "const": "Template" },
+    "metadata": { "$ref": "metadata.json" },
+    "spec": { "$ref": "#/$defs/spec" }
+  },
+  "$defs": {
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cluster", "image", "storage"],
+      "properties": {
+        "cluster": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The Proxmox cluster that holds the template.",
+          "x-nodr-ref": "ProxmoxCluster",
+          "x-nodr-tier": "basic"
+        },
+        "node": {
+          "$ref": "common.json#/$defs/name",
+          "description": "The node that holds the template. VMs placed on other nodes are cloned from there.",
+          "x-nodr-tier": "standard"
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "checksum"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Where to download the cloud image.",
+              "pattern": "^https?://\\S+$"
+            },
+            "checksum": {
+              "type": "string",
+              "description": "The image checksum as algorithm:hex.",
+              "pattern": "^(sha256|sha512):[0-9a-f]+$"
+            }
+          },
+          "x-nodr-tier": "basic"
+        },
+        "os": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "family": {
+              "type": "string",
+              "enum": ["debian", "ubuntu", "fedora", "centos", "rocky", "almalinux", "alpine", "other"]
+            },
+            "version": { "type": "string" }
+          },
+          "x-nodr-tier": "standard"
+        },
+        "storage": {
+          "$ref": "common.json#/$defs/proxmoxName",
+          "description": "The storage that holds the template's disk.",
+          "x-nodr-tier": "basic"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmid": {
+              "$ref": "common.json#/$defs/vmid",
+              "description": "The Proxmox guest ID of the template, allocated from the templates range.",
+              "x-nodr-allocated": true,
+              "x-nodr-immutable": true
+            }
+          },
+          "x-nodr-tier": "expert"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,126 @@
+# Documents that use every field of the nodr/v1alpha1 kinds. They follow the
+# examples in the design (docs/design/03-resource-model.md).
+apiVersion: nodr/v1alpha1
+kind: ProxmoxCluster
+metadata:
+  name: pve-main
+spec:
+  endpoints:
+    - https://10.0.10.11:8006
+    - https://10.0.10.12:8006
+  credentialsRef: proxmox/pve-main-token
+  tls:
+    fingerprint: "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89"
+  nodes: [pve1, pve2, pve3]
+  network:
+    guestBridge: vmbr0
+---
+apiVersion: nodr/v1alpha1
+kind: Network
+metadata:
+  name: dmz
+spec:
+  vlan: 20
+  zone: dmz
+  ipv4:
+    subnet: 10.0.20.0/24
+    gateway: 10.0.20.1
+    dhcp: { range: 10.0.20.100-10.0.20.199, leaseTime: 12h }
+    static: { range: 10.0.20.10-10.0.20.99 }
+  dns:
+    domain: dmz.home.arpa
+  wireless:
+    ssid: Home-DMZ
+    security: wpa2-wpa3-mixed
+    passphraseRef: wifi/home-dmz
+  realizeOn:
+    routers: [gw-01]
+    clusters: [pve-main]
+---
+apiVersion: nodr/v1alpha1
+kind: Template
+metadata:
+  name: debian-12-cloud
+spec:
+  cluster: pve-main
+  node: pve1
+  image:
+    url: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+    checksum: sha512:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  os: { family: debian, version: "12" }
+  storage: local-lvm
+  identity: { vmid: 9001 }
+---
+apiVersion: nodr/v1alpha1
+kind: SSHKey
+metadata:
+  name: ops-team
+spec:
+  publicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFt0c3Qta2V5LWZvci10ZXN0cy1vbmx5 ops@example
+  description: Shared key of the operations team
+---
+apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: web-01
+  uid: 01J9Z3K4T7M2Q8V5X6N0B1C2D3
+  labels: { nodr/environment: prod, app: website }
+  annotations: { nodr/description: Public website frontend }
+spec:
+  placement:
+    cluster: pve-main
+    node: auto
+    assignedNode: pve2
+    affinity:
+      separateFrom: [web-02]
+      keepWith: []
+  identity:
+    vmid: 1012
+  source:
+    template: debian-12-cloud
+  resources:
+    cpu: { cores: 2, sockets: 1, type: x86-64-v2-AES }
+    memory: { size: 4Gi, minimum: 2Gi }
+  disks:
+    - name: root
+      storage: ceph-vm
+      size: 32Gi
+      options: { discard: true, ssd: true, iothread: true }
+  nics:
+    - network: dmz
+      mac: BC:24:11:3A:5E:01
+      ipv4: { mode: auto, address: 10.0.20.21/24 }
+  guest:
+    agent: true
+    cloudInit:
+      user: ops
+      authorizedKeys: [ops-team]
+    profile: linux-baseline
+  ha:
+    enabled: true
+    maxRestart: 2
+    maxRelocate: 1
+  policies:
+    backup: nightly-7d4w
+    updates: security-weekly
+  lifecycle:
+    powerState: running
+    protection: true
+    startOnBoot: true
+    ignoreDrift: [spec.resources.memory.size]
+  proxmox:
+    machine: q35
+    bios: ovmf
+    scsiController: virtio-scsi-single
+    tags: [frontend]
+---
+apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: web-02
+spec:
+  placement:
+    cluster: pve-main
+  resources:
+    cpu: { cores: 1 }
+    memory: { size: 1Gi }
