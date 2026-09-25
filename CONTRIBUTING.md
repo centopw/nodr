@@ -5,8 +5,9 @@
 - Go 1.24 or later.
 - [golangci-lint](https://golangci-lint.run/) v2.8.0 for `make lint` and
   `make fmt`.
-- [OpenTofu](https://opentofu.org/) 1.8 or later, optionally, to validate the
-  engine code of the examples.
+- [OpenTofu](https://opentofu.org/) 1.8 or later, optionally, to run
+  `nodr plan` and `nodr apply`, the OpenTofu integration tests, and to
+  validate the engine code of the examples.
 
 `make help` lists the development tasks: `build`, `test`, `test-race`,
 `cover`, `vet`, `lint`, `fmt`, `tidy` and `clean`.
@@ -26,6 +27,8 @@
 | `internal/lens` | Field ownership reports |
 | `internal/lens/hclmap` | The HCL engine: render, lift and put for Go structs |
 | `internal/lens/proxmoxvm` | The VM lens for the `bpg/proxmox` provider |
+| `internal/compile` | Compiling intent into the OpenTofu state units below `terraform/` |
+| `internal/engine/opentofu` | Running OpenTofu on a state unit: init, saved plans and their changes, apply |
 | `internal/quantity`, `internal/diag`, `internal/buildinfo` | Byte quantities, diagnostics, version information |
 | `docs/` | Technical design and architecture decisions |
 | `examples/` | Example workspaces |
@@ -41,6 +44,11 @@
 - `examples/examples_test.go` checks that each example workspace is valid and
   that its code and intent agree. If a change alters rendered code, update
   the example's `terraform/` directory to match.
+- The integration tests of `internal/engine/opentofu` run a real OpenTofu
+  when `tofu` is on `PATH` or `NODR_TEST_TOFU` names the binary, and are
+  skipped otherwise. They need no network, and CI runs them with OpenTofu
+  1.11.4. The tests of `nodr plan` and `nodr apply` need no OpenTofu: they
+  use a fake `tofu`, a shell script that records its calls.
 
 ## Git conventions
 
@@ -56,9 +64,10 @@
   why, wrapped at 72 columns.
 - Each commit is one logical change that builds and passes the tests. Commit
   messages describe the change and nothing else.
-- Pull requests need a green CI: tests on Go 1.24 and the latest Go, lint, a
-  check of `go.sum` against the checksum database, and OpenTofu validation of
-  the example code.
+- Pull requests need a green CI: tests on Go 1.24 and the latest Go,
+  including the OpenTofu integration tests, lint, a check of `go.sum`
+  against the checksum database, and OpenTofu validation of the example
+  code.
 
 ## Changelog
 

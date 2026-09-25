@@ -37,6 +37,16 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   ID, a placement node and IPv4 addresses and writes them into the
   intent files with minimal, comment-preserving edits. Run it locally
   with `nodr admit`, or preview the changes with `--dry-run`.
+- Compilation of virtual machine intent into the OpenTofu state units
+  below `terraform/`. Managed blocks are updated in place, so code-owned
+  values, extensions and hand edits stay; a new VM gets a block in
+  `terraform/<cluster>-compute/vms.tf`, and a unit gets `versions.tf`
+  and `providers.tf` if it lacks them.
+- `nodr plan`, which compiles intent, writes the files that change and
+  plans each state unit with a local OpenTofu, printing what each unit
+  would add, change, replace and destroy, and `nodr apply`, which then
+  applies the saved plans after confirmation. Plans that replace or
+  destroy resources need `--allow-destroy`, even with `--auto-approve`.
 - A contributor guide covering setup, repository layout, tests and Git
   conventions, and continuous integration that builds, tests, lints and
   validates the example code on every change.
