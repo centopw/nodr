@@ -59,3 +59,12 @@
 - Pull requests need a green CI: tests on Go 1.24 and the latest Go, lint, a
   check of `go.sum` against the checksum database, and OpenTofu validation of
   the example code.
+
+## Changelog
+
+- **Every user-facing change** adds a line under `## [Unreleased]` in
+  [CHANGELOG.md](CHANGELOG.md), in the same pull request.
+- **A release** renames that section to `## [x.y.z] - YYYY-MM-DD` and is
+  tagged `vx.y.z`.
+- **Versions** follow [Semantic Versioning](https://semver.org/), starting
+  at `0.x` until the API is stable.
