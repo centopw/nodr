@@ -305,7 +305,7 @@ own guest and host and protects them:
 
 | Concern | Choice | Rationale |
 | ------- | ------ | --------- |
-| Control plane language | Go | Single static binary for amd64 and arm64; native HCL libraries (`hcl/v2`, `hclwrite`) that preserve comments and formatting; Kubernetes `client-go` and the Helm SDK; strong concurrency. See [ADR-0007](../adr/0007-go-single-binary-control-plane.md). |
+| Control plane language | Go | Single static binary for amd64 and arm64; native HCL libraries (`hcl/v2`, `hclwrite`) for edits that preserve comments and formatting; Kubernetes `client-go` and the Helm SDK; strong concurrency. See [ADR-0007](../adr/0007-go-single-binary-control-plane.md). |
 | Web UI | TypeScript, React, Vite | Mature ecosystem for schema-driven forms, data grids and graph views |
 | Code editor | Monaco with `monaco-languageclient` | The editor core of VS Code; speaks the Language Server Protocol over WebSocket |
 | Language servers | terraform-ls (or an OpenTofu-compatible fork), yaml-language-server with nodr schemas, the Ansible language server | Completion, hover docs and diagnostics in the browser |

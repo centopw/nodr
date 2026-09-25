@@ -145,7 +145,7 @@ aspect and engine. It has three functions:
 | Function | Signature | Behavior |
 | -------- | --------- | -------- |
 | `render` | intent → code | Creates a new managed block in canonical form. |
-| `put` | intent × code → code | Writes synced values into existing code and changes nothing else. Comments, formatting, ordering, extensions and code-owned values stay byte-for-byte identical. |
+| `put` | intent × code → code | Writes synced values into existing code and changes nothing else. Comments, ordering, extensions, code-owned values and hand formatting stay byte-for-byte identical. A canonically formatted file stays canonical, so the `=` of attributes next to a changed one can move. |
 | `lift` | code → values × ownership | Reads synced values back and classifies every attribute. |
 
 ### Laws
@@ -183,6 +183,7 @@ mappings are written as code behind the same interface. An excerpt of the
 | `spec.nics[i].network` | `network_device[i].bridge`, `network_device[i].vlan_id` | Network to bridge and VLAN, using platform facts | Lift is the inverse lookup; admission rejects networks that would be ambiguous |
 | `spec.lifecycle.powerState` | `started` | `running` is `true`, `stopped` is `false`, `unmanaged` omits the attribute and ignores it | See [§6.7](06-proxmox.md#67-vm-and-container-lifecycle) |
 | `spec.placement.assignedNode` | `node_name` | Identity | Allocated by placement; a runtime field for HA guests with `node: auto` |
+| `spec.source.template` | `clone.vm_id`, `clone.node_name` | Template to guest ID and node | Lift is the inverse lookup among the templates of the VM's cluster |
 
 ### Structure-preserving editing
 
@@ -190,7 +191,7 @@ mappings are written as code behind the same interface. An excerpt of the
 
 | Format | Library or technique |
 | ------ | -------------------- |
-| HCL | `hclwrite`, which edits at token level and keeps comments and formatting |
+| HCL | Byte-level edits at the source ranges that `hclsyntax` reports. `hclwrite` only renders new values and blocks, because writing a file through it reformats the whole file |
 | YAML (intent, Ansible, Kubernetes, Compose) | The `yaml.v3` node API, which keeps comments, anchors and key order |
 | UCI | A nodr concrete syntax tree that keeps comments and section order |
 
