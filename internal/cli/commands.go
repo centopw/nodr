@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/centopw/nodr/internal/admission"
 	"github.com/centopw/nodr/internal/buildinfo"
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/lens"
@@ -69,6 +70,52 @@ It exits with status 1 if there are errors.`,
 	}
 }
 
+func (a *app) admitCommand() *cobra.Command {
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "admit [vm/<name>...]",
+		Short: "Fill in the values nodr allocates for virtual machines",
+		Long: `Admit fills in the fields that nodr allocates for the given virtual
+machines, or for all of them, when they are empty: the UID, the node, the
+guest ID from the range of the VM's environment in nodr.yaml, and IPv4
+addresses for network interfaces with mode auto. It prints one line per
+value and, unless --dry-run is given, writes the values into the intent
+files. Values that are set never change, and only the new fields are
+written, so comments and formatting stay as they are. If a value cannot
+be allocated or written, admit changes no file and exits with status 1.
+This is the local counterpart of the admission that nodr runs on every
+change.`,
+		Example: "  nodr admit vm/web-02 --dry-run",
+		RunE: func(_ *cobra.Command, args []string) error {
+			l, err := a.mustLoad()
+			if err != nil {
+				return err
+			}
+			vms, err := l.virtualMachines(args)
+			if err != nil {
+				return err
+			}
+			assignments, diags := admission.Plan(l.ws, vms, admission.Options{})
+			a.printDiagnostics(diags)
+			if diags.HasErrors() {
+				fmt.Fprintf(a.stderr, "nodr: admission failed; no file was changed\n")
+				return errReported
+			}
+			// A dry run prepares the edits too, so it fails when a real run
+			// would.
+			if err := admission.Apply(l.ws, assignments, dryRun); err != nil {
+				return err
+			}
+			for _, as := range assignments {
+				fmt.Fprintln(a.stdout, as)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the values without writing them")
+	return cmd
+}
+
 func (a *app) renderCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "render [vm/<name>...]",
@@ -88,6 +135,9 @@ machines, or for all of them. It does not change any file.`,
 			vmLens := proxmoxvm.Lens{Resolver: resolve.NewIndex(l.ws.Documents)}
 			for i, vm := range vms {
 				out, err := vmLens.Render(vm)
+				if errors.Is(err, proxmoxvm.ErrNotAdmitted) {
+					return fmt.Errorf("%w; run 'nodr admit vm/%s' first", err, vm.Metadata.Name)
+				}
 				if err != nil {
 					return err
 				}

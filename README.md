@@ -45,8 +45,9 @@ has started. So far the repository contains:
   `proxmox_virtual_environment_vm` of the `bpg/proxmox` provider and back.
   Property-based tests check the lens laws of
   [§4.5](docs/design/04-dual-mode-and-sync.md#45-lenses).
-- **The `nodr` command line**, which validates a workspace, renders engine
-  code and shows who owns each field.
+- **The `nodr` command line**, which validates a workspace, allocates VM
+  IDs, nodes and addresses, renders engine code and shows who owns each
+  field.
 
 ## Try it
 
