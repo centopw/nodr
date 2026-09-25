@@ -58,6 +58,12 @@
             }
           },
           "x-nodr-tier": "standard"
+        },
+        "macPrefix": {
+          "type": "string",
+          "description": "The three-octet prefix nodr uses to derive deterministic MAC addresses. Defaults to BC:24:11.",
+          "pattern": "^([0-9A-Fa-f]{2}:){2}[0-9A-Fa-f]{2}$",
+          "x-nodr-tier": "expert"
         }
       }
     }

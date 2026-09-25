@@ -7,6 +7,12 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+
+- Admission derives deterministic MAC addresses from each resource UID and
+  the cluster MAC prefix, and allocates template guest IDs from the
+  workspace's `templates` environment range.
+
 ### Fixed
 
 - The release workflow no longer fails after publishing when the

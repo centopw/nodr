@@ -34,6 +34,8 @@ type Edit struct {
 	Path []string
 	// Value is the value of the field: a string, a number or a boolean.
 	Value any
+	// Order overrides the order passed to Insert for this edit.
+	Order Order
 }
 
 // Order returns the keys of the mapping at path in the order they belong
@@ -64,7 +66,11 @@ func Insert(src []byte, edits []Edit, order Order) ([]byte, error) {
 		}
 	}
 	for i, e := range edits {
-		if f, err = f.insert(docs[i], e.Path, e.Value, order); err != nil {
+		orderForEdit := order
+		if e.Order != nil {
+			orderForEdit = e.Order
+		}
+		if f, err = f.insert(docs[i], e.Path, e.Value, orderForEdit); err != nil {
 			return nil, fmt.Errorf("line %d: %s: %w", e.Line, name(e.Path), err)
 		}
 	}

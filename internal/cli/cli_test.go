@@ -361,6 +361,7 @@ metadata:
 spec:
   environments:
     prod: { vmidRange: [1000, 1999] }
+    templates: { vmidRange: [9000, 9099] }
 `,
 	"intent/platform/pve.yaml": `apiVersion: nodr/v1alpha1
 kind: ProxmoxCluster
@@ -379,6 +380,15 @@ spec:
     subnet: 10.0.20.0/24
     gateway: 10.0.20.1
     static: { range: 10.0.20.10-10.0.20.99 }
+`,
+	"intent/platform/template.yaml": `# Alpine template.
+apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: alpine }
+spec:
+  cluster: pve-main
+  image: { url: https://example.com/alpine.qcow2, checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  storage: local-lvm
 `,
 	"intent/compute/web.yaml": `# Web servers.
 apiVersion: nodr/v1alpha1
@@ -416,6 +426,7 @@ spec:
     memory: { size: 4Gi }
   nics:
     - network: dmz
+      mac: BC:24:11:3A:5E:01
       ipv4:
         mode: auto
         address: 10.0.20.10/24
@@ -423,6 +434,7 @@ spec:
 }
 
 var uidRE = regexp.MustCompile(`metadata\.uid = ([0-7][0-9A-HJKMNP-TV-Z]{25}) `)
+var macRE = regexp.MustCompile(`spec\.nics\[0\]\.mac = ([0-9A-F]{2}(:[0-9A-F]{2}){5}) `)
 
 func TestAdmit(t *testing.T) {
 	root := writeWorkspace(t, admitFiles)
@@ -435,10 +447,14 @@ vm/web-02: metadata.uid = UID (intent/compute/web.yaml)
 vm/web-02: spec.placement.assignedNode = pve1 (intent/compute/web.yaml)
 vm/web-02: spec.identity.vmid = 1001 (intent/compute/web.yaml)
 vm/web-02: spec.nics[0].ipv4.address = 10.0.20.11/24 (intent/compute/web.yaml)
+vm/web-02: spec.nics[0].mac = MAC (intent/compute/web.yaml)
+template/alpine: spec.identity.vmid = 9000 (intent/platform/template.yaml)
 `
 	dry := run("admit", "-w", root, "--dry-run")
 	dry.check(t, exitOK)
-	if got := uidRE.ReplaceAllString(dry.stdout, "metadata.uid = UID "); got != want || dry.stderr != "" {
+	dryOut := uidRE.ReplaceAllString(dry.stdout, "metadata.uid = UID ")
+	dryOut = macRE.ReplaceAllString(dryOut, "spec.nics[0].mac = MAC ")
+	if dryOut != want || dry.stderr != "" {
 		t.Errorf("admit --dry-run: stdout =\n%s\nwant\n%s\nstderr = %q", dry.stdout, want, dry.stderr)
 	}
 	if data, _ := os.ReadFile(file); string(data) != src {
@@ -447,20 +463,33 @@ vm/web-02: spec.nics[0].ipv4.address = 10.0.20.11/24 (intent/compute/web.yaml)
 
 	r := run("admit", "-w", root)
 	r.check(t, exitOK)
-	m := uidRE.FindStringSubmatch(r.stdout)
-	if m == nil || strings.Replace(r.stdout, m[1], "UID", 1) != want {
+	uidMatch := uidRE.FindStringSubmatch(r.stdout)
+	macMatch := macRE.FindStringSubmatch(r.stdout)
+	gotOut := r.stdout
+	if uidMatch != nil {
+		gotOut = strings.Replace(gotOut, uidMatch[1], "UID", 1)
+	}
+	if macMatch != nil {
+		gotOut = strings.Replace(gotOut, macMatch[1], "MAC", 1)
+	}
+	if uidMatch == nil || macMatch == nil || gotOut != want {
 		t.Fatalf("admit: stdout =\n%s\nwant\n%s", r.stdout, want)
 	}
 	admitted := strings.NewReplacer(
-		"  name: web-02\n", "  name: web-02\n  uid: "+m[1]+"\n",
+		"  name: web-02\n", "  name: web-02\n  uid: "+uidMatch[1]+"\n",
 		"    node: auto\n", "    node: auto\n    assignedNode: pve1\n  identity:\n    vmid: 1001\n",
-		"{ mode: auto }", "{ mode: auto, address: 10.0.20.11/24 }",
+		"    - network: dmz\n      ipv4: { mode: auto }", "    - network: dmz\n      mac: "+macMatch[1]+"\n      ipv4: { mode: auto, address: 10.0.20.11/24 }",
 		"    node: pve2\n", "    node: pve2\n    assignedNode: pve2\n",
 	).Replace(src)
 	if data, _ := os.ReadFile(file); string(data) != admitted {
 		t.Errorf("admit wrote\n%s\nwant\n%s", data, admitted)
 	}
 
+	templateFile := filepath.Join(root, "intent", "platform", "template.yaml")
+	templateWant := strings.Replace(admitFiles["intent/platform/template.yaml"], "  storage: local-lvm\n", "  storage: local-lvm\n  identity:\n    vmid: 9000\n", 1)
+	if data, _ := os.ReadFile(templateFile); string(data) != templateWant {
+		t.Errorf("admit wrote template\n%s\nwant\n%s", data, templateWant)
+	}
 	// Admitting again changes nothing, and the workspace stays valid.
 	again := run("admit", "-w", root)
 	again.check(t, exitOK)
@@ -471,6 +500,39 @@ vm/web-02: spec.nics[0].ipv4.address = 10.0.20.11/24 (intent/compute/web.yaml)
 		t.Errorf("second admit changed the file:\n%s", data)
 	}
 	run("validate", "-w", root).check(t, exitOK)
+}
+
+func TestAdmitReservesGuestIDsAcrossVMsAndTemplates(t *testing.T) {
+	files := map[string]string{}
+	for name, content := range admitFiles {
+		files[name] = content
+	}
+	files["nodr.yaml"] = strings.Replace(files["nodr.yaml"], "templates: { vmidRange: [9000, 9099] }", "templates: { vmidRange: [1000, 1999] }", 1)
+	root := writeWorkspace(t, files)
+
+	r := run("admit", "-w", root, "--dry-run")
+	r.check(t, exitOK)
+	if !strings.Contains(r.stdout, "vm/web-02: spec.identity.vmid = 1001 ") ||
+		!strings.Contains(r.stdout, "template/alpine: spec.identity.vmid = 1002 ") {
+		t.Errorf("admit guest IDs =\n%s\nwant VM 1001 then template 1002", r.stdout)
+	}
+}
+
+func TestAdmitExplicitVMLeavesTemplateUnchanged(t *testing.T) {
+	root := writeWorkspace(t, admitFiles)
+	templateFile := filepath.Join(root, "intent", "platform", "template.yaml")
+	templateSource := admitFiles["intent/platform/template.yaml"]
+
+	r := run("admit", "-w", root, "vm/web-02")
+	r.check(t, exitOK)
+	if strings.Contains(r.stdout, "template/alpine:") {
+		t.Errorf("explicit VM admission included a template assignment:\n%s", r.stdout)
+	}
+	if data, err := os.ReadFile(templateFile); err != nil {
+		t.Fatal(err)
+	} else if string(data) != templateSource {
+		t.Errorf("explicit VM admission changed template:\n%s\nwant\n%s", data, templateSource)
+	}
 }
 
 // TestAdmitMakesVMsRenderable follows a VM from intent without allocated
