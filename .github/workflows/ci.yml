@@ -26,11 +26,20 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
+      # For the integration tests of internal/engine/opentofu.
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.11.4"
+          tofu_wrapper: false
       - name: Verify module cache against go.sum
         run: go mod verify
       - name: Build
         run: go build ./...
       - name: Test
+        # With NODR_TEST_TOFU set, the integration tests fail instead of
+        # being skipped if tofu is missing.
+        env:
+          NODR_TEST_TOFU: tofu
         run: go test -race -coverprofile=coverage.out ./...
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -n 1
