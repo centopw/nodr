@@ -193,6 +193,7 @@ Idempotency-Key: 8c2d4e6f-1a3b-4c5d-9e7f-a1b2c3d4e5f6
 | `nodr migrate <kind>/<name> --aspect <aspect> --to <engine>` | Engine handoff |
 | `nodr forget <kind>/<name>` | Stop managing a resource without touching it |
 | `nodr sync --local`, `nodr validate` | Run sync and validation on a local clone |
+| `nodr admit [vm/<name>...] [--dry-run]` | Allocate UIDs, nodes, VM IDs and addresses in a local clone: the local counterpart of server-side admission ([§3.7](03-resource-model.md#37-admission)) |
 | `nodr secret set\|list\|delete` | Manage secrets |
 | `nodr merge-driver <format>` | Structural Git merge driver ([§4.6](04-dual-mode-and-sync.md#46-provenance-and-three-way-regeneration)) |
 | `nodr plugin test` | Run the plugin conformance kit |

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -267,6 +268,205 @@ spec:
 	}
 }
 
+// admitFiles is a workspace with a VM that admission has to complete and
+// one that only lacks its node.
+var admitFiles = map[string]string{
+	"nodr.yaml": `apiVersion: nodr/v1alpha1
+kind: Workspace
+metadata:
+  name: test
+spec:
+  environments:
+    prod: { vmidRange: [1000, 1999] }
+`,
+	"intent/platform/pve.yaml": `apiVersion: nodr/v1alpha1
+kind: ProxmoxCluster
+metadata: { name: pve-main }
+spec:
+  endpoints: [https://10.0.10.11:8006]
+  credentialsRef: proxmox/pve-main-token
+  nodes: [pve1, pve2]
+`,
+	"intent/network/dmz.yaml": `apiVersion: nodr/v1alpha1
+kind: Network
+metadata: { name: dmz }
+spec:
+  vlan: 20
+  ipv4:
+    subnet: 10.0.20.0/24
+    gateway: 10.0.20.1
+    static: { range: 10.0.20.10-10.0.20.99 }
+`,
+	"intent/compute/web.yaml": `# Web servers.
+apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: web-02
+  labels:
+    nodr/environment: prod
+spec:
+  placement:
+    cluster: pve-main
+    node: auto
+  resources:
+    cpu: { cores: 2 }
+    memory: { size: 2Gi }
+  nics:
+    - network: dmz
+      ipv4: { mode: auto }   # allocated by nodr
+---
+apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: web-01
+  uid: 01J9Z3K4T7M2Q8V5X6N0B1C2D3
+  labels:
+    nodr/environment: prod
+spec:
+  placement:
+    cluster: pve-main
+    node: pve2
+  identity:
+    vmid: 1000
+  resources:
+    cpu: { cores: 2 }
+    memory: { size: 4Gi }
+  nics:
+    - network: dmz
+      ipv4:
+        mode: auto
+        address: 10.0.20.10/24
+`,
+}
+
+var uidRE = regexp.MustCompile(`metadata\.uid = ([0-7][0-9A-HJKMNP-TV-Z]{25}) `)
+
+func TestAdmit(t *testing.T) {
+	root := writeWorkspace(t, admitFiles)
+	file := filepath.Join(root, "intent", "compute", "web.yaml")
+	src := admitFiles["intent/compute/web.yaml"]
+
+	// web-01 comes first by name. web-02 goes to the node with less memory.
+	want := `vm/web-01: spec.placement.assignedNode = pve2 (intent/compute/web.yaml)
+vm/web-02: metadata.uid = UID (intent/compute/web.yaml)
+vm/web-02: spec.placement.assignedNode = pve1 (intent/compute/web.yaml)
+vm/web-02: spec.identity.vmid = 1001 (intent/compute/web.yaml)
+vm/web-02: spec.nics[0].ipv4.address = 10.0.20.11/24 (intent/compute/web.yaml)
+`
+	dry := run("admit", "-w", root, "--dry-run")
+	dry.check(t, exitOK)
+	if got := uidRE.ReplaceAllString(dry.stdout, "metadata.uid = UID "); got != want || dry.stderr != "" {
+		t.Errorf("admit --dry-run: stdout =\n%s\nwant\n%s\nstderr = %q", dry.stdout, want, dry.stderr)
+	}
+	if data, _ := os.ReadFile(file); string(data) != src {
+		t.Errorf("admit --dry-run changed the file:\n%s", data)
+	}
+
+	r := run("admit", "-w", root)
+	r.check(t, exitOK)
+	m := uidRE.FindStringSubmatch(r.stdout)
+	if m == nil || strings.Replace(r.stdout, m[1], "UID", 1) != want {
+		t.Fatalf("admit: stdout =\n%s\nwant\n%s", r.stdout, want)
+	}
+	admitted := strings.NewReplacer(
+		"  name: web-02\n", "  name: web-02\n  uid: "+m[1]+"\n",
+		"    node: auto\n", "    node: auto\n    assignedNode: pve1\n  identity:\n    vmid: 1001\n",
+		"{ mode: auto }", "{ mode: auto, address: 10.0.20.11/24 }",
+		"    node: pve2\n", "    node: pve2\n    assignedNode: pve2\n",
+	).Replace(src)
+	if data, _ := os.ReadFile(file); string(data) != admitted {
+		t.Errorf("admit wrote\n%s\nwant\n%s", data, admitted)
+	}
+
+	// Admitting again changes nothing, and the workspace stays valid.
+	again := run("admit", "-w", root)
+	again.check(t, exitOK)
+	if again.stdout != "" {
+		t.Errorf("second admit: stdout = %q", again.stdout)
+	}
+	if data, _ := os.ReadFile(file); string(data) != admitted {
+		t.Errorf("second admit changed the file:\n%s", data)
+	}
+	run("validate", "-w", root).check(t, exitOK)
+}
+
+// TestAdmitMakesVMsRenderable follows a VM from intent without allocated
+// values to rendered code.
+func TestAdmitMakesVMsRenderable(t *testing.T) {
+	root := writeWorkspace(t, admitFiles)
+	r := run("render", "-w", root, "vm/web-02")
+	r.check(t, exitError)
+	if !strings.Contains(r.stderr, "not admitted yet; run 'nodr admit vm/web-02' first") {
+		t.Errorf("render before admission: stderr = %q", r.stderr)
+	}
+
+	run("admit", "-w", root, "vm/web-02").check(t, exitOK)
+	r = run("render", "-w", root, "vm/web-02")
+	r.check(t, exitOK)
+	code := strings.Join(strings.Fields(r.stdout), " ")
+	for _, want := range []string{`node_name = "pve1"`, "vm_id = 1001", `address = "10.0.20.11/24" gateway = "10.0.20.1"`} {
+		if !strings.Contains(code, want) {
+			t.Errorf("render lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	// Only web-02 was admitted: web-01 still has no node.
+	run("render", "-w", root, "vm/web-01").check(t, exitError)
+}
+
+func TestAdmitReportsProblems(t *testing.T) {
+	files := map[string]string{}
+	for name, content := range admitFiles {
+		files[name] = content
+	}
+	files["intent/compute/web.yaml"] = strings.Replace(admitFiles["intent/compute/web.yaml"], "nodr/environment: prod\nspec:\n  placement:\n    cluster: pve-main\n    node: auto", "app: web\nspec:\n  placement:\n    cluster: pve-main\n    node: auto", 1)
+	root := writeWorkspace(t, files)
+	r := run("admit", "-w", root)
+	r.check(t, exitError)
+	want := `intent/compute/web.yaml:8: error: spec.identity.vmid: cannot allocate a guest ID: the label nodr/environment is missing, so the range of IDs is unknown
+nodr: admission failed; no file was changed
+`
+	if r.stderr != want || r.stdout != "" {
+		t.Errorf("stderr =\n%s\nwant\n%s\nstdout = %q", r.stderr, want, r.stdout)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "intent", "compute", "web.yaml")); string(data) != files["intent/compute/web.yaml"] {
+		t.Errorf("a failed admission changed the file:\n%s", data)
+	}
+}
+
+// TestAdmitDryRunFailsLikeARealRun checks that a dry run also fails when
+// a value cannot be written.
+func TestAdmitDryRunFailsLikeARealRun(t *testing.T) {
+	files := map[string]string{}
+	for name, content := range admitFiles {
+		files[name] = content
+	}
+	// The interfaces share one mapping, so the address of the first cannot
+	// be written without changing the second.
+	files["intent/compute/web.yaml"] = strings.Replace(admitFiles["intent/compute/web.yaml"],
+		"      ipv4: { mode: auto }   # allocated by nodr\n",
+		"      ipv4: &auto { mode: auto }\n    - network: dmz\n      ipv4: *auto\n", 1)
+	root := writeWorkspace(t, files)
+	run("validate", "-w", root).check(t, exitOK)
+	for _, args := range [][]string{{"admit", "-w", root, "--dry-run"}, {"admit", "-w", root}} {
+		r := run(args...)
+		r.check(t, exitError)
+		if r.stdout != "" || !strings.Contains(r.stderr, "spec.nics.0.ipv4.address: inserting the field would change other content") {
+			t.Errorf("%v: stdout = %q, stderr = %q", args, r.stdout, r.stderr)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "intent", "compute", "web.yaml")); string(data) != files["intent/compute/web.yaml"] {
+		t.Errorf("a failed admission changed the file:\n%s", data)
+	}
+}
+
+func TestAdmitExample(t *testing.T) {
+	r := run("admit", "-w", example, "--dry-run")
+	r.check(t, exitOK)
+	if r.stdout != "" || r.stderr != "" {
+		t.Errorf("the example is admitted, but admit would write:\n%s%s", r.stdout, r.stderr)
+	}
+}
+
 func TestErrors(t *testing.T) {
 	tests := []struct {
 		args []string
@@ -278,6 +478,8 @@ func TestErrors(t *testing.T) {
 		{[]string{"describe", "-w", example, "web-01"}, exitUsage, "want <kind>/<name>"},
 		{[]string{"render", "-w", example, "network/lan"}, exitUsage, "network/lan: only virtual machines are supported so far"},
 		{[]string{"render", "-w", example, "vm/ghost"}, exitError, "vm/ghost does not exist in the workspace"},
+		{[]string{"admit", "-w", example, "network/lan"}, exitUsage, "network/lan: only virtual machines are supported so far"},
+		{[]string{"admit", "-w", example, "vm/ghost", "--dry-run"}, exitError, "vm/ghost does not exist in the workspace"},
 		{[]string{"validate", "--frobnicate"}, exitUsage, "unknown flag: --frobnicate"},
 		{[]string{"version", "extra"}, exitUsage, `unexpected argument "extra"`},
 	}

@@ -74,6 +74,7 @@ disk.`,
 	root.AddCommand(
 		a.versionCommand(),
 		a.validateCommand(),
+		a.admitCommand(),
 		a.renderCommand(),
 		a.describeCommand(),
 	)

@@ -20,6 +20,8 @@
 | `internal/nrm` | Intent documents: parsing, metadata, schema and reference validation |
 | `internal/nrm/v1alpha1` | The `nodr/v1alpha1` kinds: schemas, Go types and semantic checks |
 | `internal/workspace` | Loading a workspace from disk |
+| `internal/admission` | Allocating UIDs, nodes, VM IDs and addresses, and writing them into intent |
+| `internal/yamledit` | Minimal edits of YAML files that keep comments and formatting |
 | `internal/resolve` | Resolving references between resources, in both directions |
 | `internal/lens` | Field ownership reports |
 | `internal/lens/hclmap` | The HCL engine: render, lift and put for Go structs |
