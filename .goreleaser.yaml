@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# GoReleaser configuration for the releases of nodr. The release workflow,
+# .github/workflows/release.yml, runs it when a version tag is pushed, and CI
+# checks it and builds a snapshot on every pull request. `make snapshot`
+# builds the same archives locally in dist/ without publishing anything.
+version: 2
+
+project_name: nodr
+
+builds:
+  - main: ./cmd/nodr
+    binary: nodr
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X {{ .ModulePath }}/internal/buildinfo.Version=v{{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Date the binaries with the commit time rather than the build time, so
+    # that rebuilding a tag reproduces them, timestamps included.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - CHANGELOG.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# The release notes are the section of the version in CHANGELOG.md, which
+# the release workflow passes with --release-notes. GoReleaser then uses them
+# instead of building a changelog from the Git history, and snapshots build
+# none. Do not set changelog.disable: GoReleaser would then ignore
+# --release-notes too, and publish the release without notes.
+
+release:
+  # A tag with a pre-release suffix, such as v0.2.0-rc.1, makes a pre-release.
+  prerelease: auto

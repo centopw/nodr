@@ -8,13 +8,17 @@ LDFLAGS := -s -w -X $(MODULE)/internal/buildinfo.Version=$(VERSION)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test test-race cover vet lint fmt tidy clean
+.PHONY: help build snapshot test test-race cover vet lint fmt tidy clean
 
 help: ## List available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 build: ## Build bin/nodr
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/nodr ./cmd/nodr
+
+snapshot: ## Build the release archives in dist/ with GoReleaser
+	@command -v goreleaser >/dev/null || { echo "make snapshot needs GoReleaser v2: https://goreleaser.com/install/" >&2; exit 1; }
+	goreleaser release --snapshot --clean
 
 test: ## Run the unit tests
 	$(GO) test ./...
@@ -39,4 +43,4 @@ tidy: ## Tidy go.mod and go.sum
 	$(GO) mod tidy
 
 clean: ## Remove build and coverage output
-	rm -rf $(BIN_DIR) coverage.out
+	rm -rf $(BIN_DIR) dist coverage.out

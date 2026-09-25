@@ -55,3 +55,6 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - A contributor guide covering setup, repository layout, tests and Git
   conventions, and continuous integration that builds, tests, lints and
   validates the example code on every change.
+- Release archives for Linux, macOS and Windows on amd64 and arm64,
+  published on GitHub with SHA-256 checksums and build provenance
+  attestations.
