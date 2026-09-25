@@ -28,6 +28,17 @@ carries two changes made in code, as in the
 - The `smbios` block is an extension: nodr has no intent field for it and
   keeps it as it is.
 
+Try it from the repository root:
+
+```console
+$ go run ./cmd/nodr validate -w examples/homelab
+8 documents valid
+
+$ go run ./cmd/nodr render -w examples/homelab vm/web-01
+
+$ go run ./cmd/nodr describe -w examples/homelab vm/web-01 --ownership
+```
+
 A test (`examples/examples_test.go`) checks that the code and the intent of
 this workspace agree, so that syncing it would change neither.
 
