@@ -16,16 +16,18 @@ func TestClusterConnect_BootstrapsAndWritesIntent(t *testing.T) {
 	t.Setenv("NODR_KEK", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	root := writeWorkspace(t, planFiles)
 	srv := proxmoxtest.NewServer(t, map[string]http.HandlerFunc{
-		"POST /api2/json/access/ticket": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api2/json/access/ticket": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `{"ticket":"T","CSRFPreventionToken":"C"}`)
 		},
-		"GET /api2/json/nodes/pve1/certificates/info": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/nodes/pve1/certificates/info": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `[{"fingerprint":"AA:BB:CC"}]`)
 		},
-		"POST /api2/json/access/users":                     func(w http.ResponseWriter, r *http.Request) { proxmoxtest.JSONResponse(w, http.StatusOK, "") },
-		"POST /api2/json/access/roles":                     func(w http.ResponseWriter, r *http.Request) { proxmoxtest.JSONResponse(w, http.StatusOK, "") },
-		"PUT /api2/json/access/acl":                        func(w http.ResponseWriter, r *http.Request) { proxmoxtest.JSONResponse(w, http.StatusOK, "") },
-		"POST /api2/json/access/users/nodr@pve/token/nodr": func(w http.ResponseWriter, r *http.Request) { proxmoxtest.JSONResponse(w, http.StatusOK, `{"value":"wizard-secret-xyz"}`) },
+		"POST /api2/json/access/users": func(w http.ResponseWriter, _ *http.Request) { proxmoxtest.JSONResponse(w, http.StatusOK, "") },
+		"POST /api2/json/access/roles": func(w http.ResponseWriter, _ *http.Request) { proxmoxtest.JSONResponse(w, http.StatusOK, "") },
+		"PUT /api2/json/access/acl":    func(w http.ResponseWriter, _ *http.Request) { proxmoxtest.JSONResponse(w, http.StatusOK, "") },
+		"POST /api2/json/access/users/nodr@pve/token/nodr": func(w http.ResponseWriter, _ *http.Request) {
+			proxmoxtest.JSONResponse(w, http.StatusOK, `{"value":"wizard-secret-xyz"}`)
+		},
 	})
 	defer srv.Close()
 

@@ -46,7 +46,7 @@ func generateTestCert(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 }
 
 func TestPinnedHTTPClient_MatchingFingerprint(t *testing.T) {
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -68,7 +68,7 @@ func TestPinnedHTTPClient_MatchingFingerprint(t *testing.T) {
 }
 
 func TestPinnedHTTPClient_MismatchedFingerprint(t *testing.T) {
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()

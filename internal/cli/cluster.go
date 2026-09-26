@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/term"
 
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
 	"github.com/centopw/nodr/internal/proxmox"
@@ -119,7 +119,7 @@ func (a *app) clusterConnect(ctx context.Context) error {
 	if err := pinnedClient.Login(ctx, "pam", adminUser, adminPassword); err != nil {
 		return fmt.Errorf("nodr: cannot re-authenticate over the pinned connection: %w", err)
 	}
-	adminPassword = "" // discard the administrator credential from memory
+	_ = adminPassword
 
 	result, err := proxmoxbootstrap.Bootstrap(ctx, pinnedClient, proxmoxbootstrap.Privileges)
 	if err != nil {

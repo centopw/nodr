@@ -376,7 +376,7 @@ func TestPlanUnits_ResolvesCredentialsAndSetsRunnerEnv(t *testing.T) {
 
 	var resolvedRef string
 	fakeSecret := "root@pam!token=1111-2222-3333"
-	mockResolver := func(ctx context.Context, ref string) ([]byte, error) {
+	mockResolver := func(_ context.Context, ref string) ([]byte, error) {
 		resolvedRef = ref
 		return []byte(fakeSecret), nil
 	}
@@ -408,7 +408,7 @@ func TestPlanUnits_ResolverFailureStopsPlan(t *testing.T) {
 	})
 	ws := loadWorkspace(t, root)
 
-	mockResolver := func(ctx context.Context, ref string) ([]byte, error) {
+	mockResolver := func(_ context.Context, _ string) ([]byte, error) {
 		return nil, errors.New("key store unavailable")
 	}
 

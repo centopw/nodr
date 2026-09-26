@@ -36,8 +36,8 @@ type UnitPlan struct {
 // credentials, matching the behavior before this type existed.
 type Resolver func(ctx context.Context, ref string) ([]byte, error)
 
-// credentialsRefFor returns the credentialsRef for the given cluster in ws, if found.
-func credentialsRefFor(ws *workspace.Workspace, cluster string) (string, bool) {
+// CredentialsRefFor returns the credentialsRef for the given cluster in ws, if found.
+func CredentialsRefFor(ws *workspace.Workspace, cluster string) (string, bool) {
 	d := ws.Find(nrm.Ref{Kind: v1alpha1.KindProxmoxCluster, Name: cluster})
 	if d == nil {
 		return "", false
@@ -188,7 +188,7 @@ func PlanUnits(ctx context.Context, ws *workspace.Workspace, only []string, plan
 		var secrets [][]byte
 		if resolve != nil {
 			if cluster := unitClusters[dir]; cluster != "" {
-				if ref, ok := credentialsRefFor(ws, cluster); ok {
+				if ref, ok := CredentialsRefFor(ws, cluster); ok {
 					secret, err := resolve(ctx, ref)
 					if err != nil {
 						return files, nil, UnitError(dir, fmt.Errorf("resolve credentials for cluster %s: %w", cluster, err))

@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centopw/nodr/internal/authn"
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
-	"github.com/centopw/nodr/internal/authn"
 	"github.com/centopw/nodr/internal/secrets"
 	"github.com/centopw/nodr/internal/workspace"
 )
@@ -178,13 +178,23 @@ func TestAuthGate_AllowsAuthenticatedRequest(t *testing.T) {
 func TestWorkspacePlan_ResolvesAndDoesNotLeakToken(t *testing.T) {
 	root := testWorkspace(t)
 	dir := t.TempDir()
-	authStore, _ := authn.Open(filepath.Join(dir, "authn.db"))
+	authStore, err := authn.Open(filepath.Join(dir, "authn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer authStore.Close()
-	authStore.CreateAccount(t.Context(), "admin", "test-password-123")
+	if err := authStore.CreateAccount(t.Context(), "admin", "test-password-123"); err != nil {
+		t.Fatal(err)
+	}
 	kek := make([]byte, 32)
-	secretsStore, _ := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	secretsStore, err := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer secretsStore.Close()
-	secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("plan-leak-check-token"))
+	if err := secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("plan-leak-check-token")); err != nil {
+		t.Fatal(err)
+	}
 	handler := Handler(t.Context(), root, authStore, secretsStore)
 
 	fake := installFakeTofu(t)
@@ -206,13 +216,23 @@ func TestWorkspacePlan_ResolvesAndDoesNotLeakToken(t *testing.T) {
 func TestWorkspacePlan_ErrorResponseDoesNotLeakToken(t *testing.T) {
 	root := testWorkspace(t)
 	dir := t.TempDir()
-	authStore, _ := authn.Open(filepath.Join(dir, "authn.db"))
+	authStore, err := authn.Open(filepath.Join(dir, "authn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer authStore.Close()
-	authStore.CreateAccount(t.Context(), "admin", "test-password-123")
+	if err := authStore.CreateAccount(t.Context(), "admin", "test-password-123"); err != nil {
+		t.Fatal(err)
+	}
 	kek := make([]byte, 32)
-	secretsStore, _ := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	secretsStore, err := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer secretsStore.Close()
-	secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("error-leak-check-token"))
+	if err := secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("error-leak-check-token")); err != nil {
+		t.Fatal(err)
+	}
 	handler := Handler(t.Context(), root, authStore, secretsStore)
 
 	installFakeTofu(t)

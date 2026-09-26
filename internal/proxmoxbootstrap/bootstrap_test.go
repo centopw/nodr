@@ -13,19 +13,19 @@ import (
 func TestBootstrap_Sequence(t *testing.T) {
 	var calls []string
 	srv := proxmoxtest.NewServer(t, map[string]http.HandlerFunc{
-		"POST /api2/json/access/users": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api2/json/access/users": func(w http.ResponseWriter, _ *http.Request) {
 			calls = append(calls, "CreateUser")
 			proxmoxtest.JSONResponse(w, http.StatusOK, "")
 		},
-		"POST /api2/json/access/roles": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api2/json/access/roles": func(w http.ResponseWriter, _ *http.Request) {
 			calls = append(calls, "CreateRole")
 			proxmoxtest.JSONResponse(w, http.StatusOK, "")
 		},
-		"PUT /api2/json/access/acl": func(w http.ResponseWriter, r *http.Request) {
+		"PUT /api2/json/access/acl": func(w http.ResponseWriter, _ *http.Request) {
 			calls = append(calls, "UpdateACL")
 			proxmoxtest.JSONResponse(w, http.StatusOK, "")
 		},
-		"POST /api2/json/access/users/nodr@pve/token/nodr": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api2/json/access/users/nodr@pve/token/nodr": func(w http.ResponseWriter, _ *http.Request) {
 			calls = append(calls, "CreateAPIToken")
 			proxmoxtest.JSONResponse(w, http.StatusOK, `{"value":"bootstrap-secret-abc"}`)
 		},

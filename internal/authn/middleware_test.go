@@ -11,7 +11,7 @@ import (
 
 func TestMiddleware_RejectsWithoutSession(t *testing.T) {
 	s := openStore(t)
-	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/workspaces", nil)
@@ -25,7 +25,7 @@ func TestMiddleware_RejectsWithoutSession(t *testing.T) {
 func TestMiddleware_AllowsLoginPath(t *testing.T) {
 	s := openStore(t)
 	called := false
-	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -55,7 +55,7 @@ func TestLoginHandler_SetsSessionCookieAndMiddlewareAccepts(t *testing.T) {
 		t.Fatalf("cookies = %v, want one nodr_session cookie", cookies)
 	}
 
-	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/workspaces", nil)

@@ -21,8 +21,27 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   badge, modal and message markup across the VM list, changes panel, new
   VM form and app shell, documented in a Storybook component catalog
   (`cd web && npm run storybook`).
+- `credentialsRef` now resolves through the secrets store into
+  `PROXMOX_VE_API_TOKEN` for every OpenTofu plan and apply, for both the CLI
+  and the API.
+- `nodr cluster connect`: an interactive wizard that bootstraps a
+  least-privilege `nodr@pve` user, role and API token on a Proxmox VE
+  cluster, pins its TLS certificate fingerprint, and writes the resulting
+  intent.
+- `nodr auth create-admin`: creates the local administrator account used to
+  sign in to the dashboard and API.
+- The dashboard and API now require an authenticated session
+  (`HttpOnly`/`Secure`/`SameSite=Strict` cookie) for every route.
 
 ### Fixed
+
+- OpenTofu output and error messages are now scrubbed of any resolved
+  Proxmox API token before reaching logs or API responses.
+
+### Changed
+
+- `nodr server`'s default `--addr` changed from `:8080` to `127.0.0.1:8080`
+  (loopback-only); pass an explicit `--addr` to bind elsewhere.
 
 - The release workflow no longer fails after publishing when the
   repository is private. It creates build provenance attestations only

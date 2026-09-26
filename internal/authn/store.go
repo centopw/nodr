@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers modernc sqlite driver for database/sql
 )
 
 // ErrInvalidCredentials reports a wrong username or password.
@@ -96,8 +96,8 @@ func verifyPassword(password, encoded string) bool {
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		return false
 	}
-	var memory, time_, threads uint32
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time_, &threads); err != nil {
+	var memory, iterTime, threads uint32
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterTime, &threads); err != nil {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
@@ -108,7 +108,7 @@ func verifyPassword(password, encoded string) bool {
 	if err != nil {
 		return false
 	}
-	got := argon2.IDKey([]byte(password), salt, time_, memory, uint8(threads), uint32(len(want)))
+	got := argon2.IDKey([]byte(password), salt, iterTime, memory, uint8(threads), uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 

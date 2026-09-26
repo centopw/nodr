@@ -121,11 +121,15 @@ func (a *app) secretsResolve(root string) (planapply.Resolver, error) {
 	a.secretsMu.Lock()
 	defer a.secretsMu.Unlock()
 	if a.secretsStore == nil {
+		dbPath := filepath.Join(root, ".nodr", "secrets.db")
+		if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
 		kek, err := secrets.LoadKEK(secrets.KEKConfig{EnvVar: "NODR_KEK"})
 		if err != nil {
 			return nil, err
 		}
-		store, err := secrets.Open(filepath.Join(root, ".nodr", "secrets.db"), kek)
+		store, err := secrets.Open(dbPath, kek)
 		if err != nil {
 			return nil, err
 		}
