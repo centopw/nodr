@@ -2,6 +2,8 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,13 +14,16 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/centopw/nodr/internal/admission"
 	"github.com/centopw/nodr/internal/diag"
+	"github.com/centopw/nodr/internal/engine/opentofu"
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
+	"github.com/centopw/nodr/internal/planapply"
 	"github.com/centopw/nodr/internal/workspace"
 )
 
@@ -27,8 +32,12 @@ const apiPrefix = "/api/v1"
 // Handler returns the API handler for the workspace rooted at root. The
 // workspace is loaded from disk for every request, so responses and commands
 // always operate on current intent rather than a process-local cache.
-func Handler(root string) http.Handler {
-	a := &server{root: root}
+func Handler(ctx context.Context, root string) http.Handler {
+	a := &server{
+		ctx:   ctx,
+		root:  root,
+		plans: make(map[string]*storedPlan),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+apiPrefix+"/workspaces", a.listWorkspaces)
 	mux.HandleFunc("GET "+apiPrefix+"/workspaces/{workspace}", a.getWorkspace)
@@ -42,9 +51,20 @@ func Handler(root string) http.Handler {
 	return mux
 }
 
+type storedPlan struct {
+	id        string
+	dir       string
+	plans     []planapply.UnitPlan
+	createdAt time.Time
+}
+
 type server struct {
+	ctx      context.Context
 	root     string
 	createMu sync.Mutex
+	planMu   sync.Mutex
+	plansMu  sync.Mutex
+	plans    map[string]*storedPlan
 }
 
 type fieldError struct {
@@ -53,11 +73,12 @@ type fieldError struct {
 }
 
 type problem struct {
-	Type   string       `json:"type"`
-	Title  string       `json:"title"`
-	Status int          `json:"status"`
-	Detail string       `json:"detail"`
-	Errors []fieldError `json:"errors,omitempty"`
+	Type   string             `json:"type"`
+	Title  string             `json:"title"`
+	Status int                `json:"status"`
+	Detail string             `json:"detail"`
+	Errors []fieldError       `json:"errors,omitempty"`
+	Units  []applyUnitOutcome `json:"units,omitempty"`
 }
 
 func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
@@ -79,6 +100,18 @@ func writeProblem(w http.ResponseWriter, status int, title, detail string, errs 
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(problem{
 		Type: "about:blank", Title: title, Status: status, Detail: detail, Errors: errs,
+	})
+}
+
+func writeProblemWithUnits(w http.ResponseWriter, status int, title, detail string, units []applyUnitOutcome) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(problem{
+		Type:   "about:blank",
+		Title:  title,
+		Status: status,
+		Detail: detail,
+		Units:  units,
 	})
 }
 
@@ -228,9 +261,50 @@ func (a *server) listResources(w http.ResponseWriter, r *http.Request) {
 }
 
 type commandRequest struct {
-	Command string         `json:"command"`
-	Target  string         `json:"target,omitempty"`
-	Params  vmCreateParams `json:"params"`
+	Command string          `json:"command"`
+	Target  string          `json:"target,omitempty"`
+	Params  json.RawMessage `json:"params"`
+}
+
+type planUnitSummaryResponse struct {
+	Create  int `json:"create"`
+	Update  int `json:"update"`
+	Replace int `json:"replace"`
+	Delete  int `json:"delete"`
+}
+
+type planChangeResponse struct {
+	Address string `json:"address"`
+	Action  string `json:"action"`
+}
+
+type planUnitResponse struct {
+	Dir         string                  `json:"dir"`
+	HasChanges  bool                    `json:"hasChanges"`
+	Summary     planUnitSummaryResponse `json:"summary"`
+	Destructive bool                    `json:"destructive"`
+	Changes     []planChangeResponse    `json:"changes"`
+}
+
+type workspacePlanResponse struct {
+	PlanID                string             `json:"planId"`
+	Units                 []planUnitResponse `json:"units"`
+	HasChanges            bool               `json:"hasChanges"`
+	HasDestructiveChanges bool               `json:"hasDestructiveChanges"`
+}
+
+type workspaceApplyParams struct {
+	PlanID       string `json:"planId"`
+	AllowDestroy bool   `json:"allowDestroy"`
+}
+
+type applyUnitOutcome struct {
+	Dir     string `json:"dir"`
+	Outcome string `json:"outcome"`
+}
+
+type workspaceApplyResponse struct {
+	Units []applyUnitOutcome `json:"units"`
 }
 
 type vmCreateParams struct {
@@ -266,12 +340,35 @@ func (a *server) runCommand(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "Invalid request", fmt.Sprintf("decode JSON body: %v", err), nil)
 		return
 	}
-	if request.Command != "vm.create" {
+	switch request.Command {
+	case "vm.create":
+		var params vmCreateParams
+		if len(request.Params) > 0 {
+			dec := json.NewDecoder(bytes.NewReader(request.Params))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&params); err != nil {
+				writeProblem(w, http.StatusBadRequest, "Invalid request", fmt.Sprintf("decode params: %v", err), nil)
+				return
+			}
+		}
+		a.createVM(w, params)
+	case "workspace.plan":
+		a.planWorkspace(w, r)
+	case "workspace.apply":
+		var params workspaceApplyParams
+		if len(request.Params) > 0 {
+			dec := json.NewDecoder(bytes.NewReader(request.Params))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&params); err != nil {
+				writeProblem(w, http.StatusBadRequest, "Invalid request", fmt.Sprintf("decode params: %v", err), nil)
+				return
+			}
+		}
+		a.applyWorkspace(w, params)
+	default:
 		message := fmt.Sprintf("command %q is not supported", request.Command)
 		writeProblem(w, http.StatusBadRequest, "Unknown command", message, []fieldError{{Path: "command", Message: message}})
-		return
 	}
-	a.createVM(w, request.Params)
 }
 
 // createVM validates and admits a new VirtualMachine. It reloads the
@@ -575,4 +672,201 @@ func networkValues(nics []v1alpha1.NIC) ([]string, []string) {
 
 func displayGiB(value string) string {
 	return strings.TrimSuffix(value, "Gi") + " GiB"
+}
+
+func (a *server) getStoredPlan(id string) (*storedPlan, bool) {
+	a.plansMu.Lock()
+	defer a.plansMu.Unlock()
+	stored, ok := a.plans[id]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(stored.createdAt) > 15*time.Minute {
+		delete(a.plans, id)
+		_ = os.RemoveAll(stored.dir)
+		return nil, false
+	}
+	return stored, true
+}
+
+func (a *server) removeStoredPlan(id string) {
+	a.plansMu.Lock()
+	defer a.plansMu.Unlock()
+	if stored, ok := a.plans[id]; ok {
+		delete(a.plans, id)
+		_ = os.RemoveAll(stored.dir)
+	}
+}
+
+func (a *server) planWorkspace(w http.ResponseWriter, r *http.Request) {
+	if !a.planMu.TryLock() {
+		writeProblem(w, http.StatusConflict, "Conflict", "another plan or apply is already running", nil)
+		return
+	}
+	defer a.planMu.Unlock()
+
+	ws, ok := a.load(w)
+	if !ok {
+		return
+	}
+
+	planDir, err := os.MkdirTemp("", "nodr-api-plan-")
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", fmt.Sprintf("create plan temp dir: %v", err), nil)
+		return
+	}
+
+	_, plans, err := planapply.PlanUnits(r.Context(), ws, nil, planDir, nil, nil)
+	if err != nil {
+		_ = os.RemoveAll(planDir)
+		var compErr *planapply.CompileError
+		if errors.As(err, &compErr) {
+			writeDiagnosticProblem(w, http.StatusBadRequest, "Compilation failed", compErr.Diagnostics)
+			return
+		}
+		if errors.Is(err, opentofu.ErrNotFound) {
+			writeProblem(w, http.StatusServiceUnavailable, "OpenTofu not found", "OpenTofu is not installed or not on PATH; install it or set NODR_TOFU", nil)
+			return
+		}
+		var cmdErr *opentofu.CommandError
+		if errors.As(err, &cmdErr) {
+			unitDir := planapply.UnitDir(err)
+			if unitDir == "" {
+				unitDir = cmdErr.Dir
+			}
+			detail := fmt.Sprintf("%s: %s", unitDir, cmdErr.Command)
+			if cmdErr.Stderr != "" {
+				detail = fmt.Sprintf("%s: %s: %s", unitDir, cmdErr.Command, strings.TrimSpace(cmdErr.Stderr))
+			}
+			writeProblem(w, http.StatusBadGateway, "OpenTofu error", detail, nil)
+			return
+		}
+		writeProblem(w, http.StatusInternalServerError, "Internal server error", err.Error(), nil)
+		return
+	}
+
+	planID := nrm.NewUID()
+	a.plansMu.Lock()
+	a.plans[planID] = &storedPlan{
+		id:        planID,
+		dir:       planDir,
+		plans:     plans,
+		createdAt: time.Now(),
+	}
+	a.plansMu.Unlock()
+
+	unitsResp := make([]planUnitResponse, 0, len(plans))
+	hasAnyChanges := false
+	hasAnyDestructive := false
+
+	for _, u := range plans {
+		s := u.Plan.Summary()
+		unitSummary := planUnitSummaryResponse{
+			Create:  s.Create,
+			Update:  s.Update,
+			Replace: s.Replace,
+			Delete:  s.Delete,
+		}
+		changes := make([]planChangeResponse, 0)
+		unitDestructive := false
+		for _, c := range u.Plan.Changes {
+			if c.Action == opentofu.Replace || c.Action == opentofu.Delete {
+				unitDestructive = true
+			}
+			if c.Action != opentofu.NoOp {
+				changes = append(changes, planChangeResponse{
+					Address: c.Address,
+					Action:  string(c.Action),
+				})
+			}
+		}
+		unitHasChanges := u.Plan.HasChanges()
+		if unitHasChanges {
+			hasAnyChanges = true
+		}
+		if unitDestructive {
+			hasAnyDestructive = true
+		}
+		unitsResp = append(unitsResp, planUnitResponse{
+			Dir:         u.Dir,
+			HasChanges:  unitHasChanges,
+			Summary:     unitSummary,
+			Destructive: unitDestructive,
+			Changes:     changes,
+		})
+	}
+
+	writeJSON(w, http.StatusCreated, workspacePlanResponse{
+		PlanID:                planID,
+		Units:                 unitsResp,
+		HasChanges:            hasAnyChanges,
+		HasDestructiveChanges: hasAnyDestructive,
+	})
+}
+
+func (a *server) applyWorkspace(w http.ResponseWriter, params workspaceApplyParams) {
+	if strings.TrimSpace(params.PlanID) == "" {
+		message := "params.planId is required"
+		writeProblem(w, http.StatusBadRequest, "Invalid request", message, []fieldError{
+			{Path: "params.planId", Message: message},
+		})
+		return
+	}
+
+	if !a.planMu.TryLock() {
+		writeProblem(w, http.StatusConflict, "Conflict", "another plan or apply is already running", nil)
+		return
+	}
+	defer a.planMu.Unlock()
+
+	stored, ok := a.getStoredPlan(params.PlanID)
+	if !ok {
+		writeProblem(w, http.StatusNotFound, "Plan not found", fmt.Sprintf("plan %q was not found or has expired", params.PlanID), nil)
+		return
+	}
+
+	destructive := planapply.DestructiveChanges(stored.plans)
+	if len(destructive) > 0 && !params.AllowDestroy {
+		detail := fmt.Sprintf("the plan replaces or destroys resources:\n  %s\nrun apply with allowDestroy: true to make these changes", strings.Join(destructive, "\n  "))
+		writeProblem(w, http.StatusBadRequest, "Destructive changes require approval", detail, nil)
+		return
+	}
+
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	applied, err := planapply.Apply(ctx, stored.plans, nil, nil)
+	unitsOutcome := make([]applyUnitOutcome, 0, len(stored.plans))
+	for i, u := range stored.plans {
+		switch {
+		case i < len(applied):
+			unitsOutcome = append(unitsOutcome, applyUnitOutcome{Dir: u.Dir, Outcome: "applied"})
+		case i == len(applied) && err != nil:
+			unitsOutcome = append(unitsOutcome, applyUnitOutcome{Dir: u.Dir, Outcome: "failed"})
+		default:
+			unitsOutcome = append(unitsOutcome, applyUnitOutcome{Dir: u.Dir, Outcome: "not applied"})
+		}
+	}
+
+	if err != nil {
+		var cmdErr *opentofu.CommandError
+		detail := err.Error()
+		if errors.As(err, &cmdErr) {
+			unitDir := planapply.UnitDir(err)
+			if unitDir == "" {
+				unitDir = cmdErr.Dir
+			}
+			if cmdErr.Stderr != "" {
+				detail = fmt.Sprintf("%s: %s: %s", unitDir, cmdErr.Command, strings.TrimSpace(cmdErr.Stderr))
+			} else {
+				detail = fmt.Sprintf("%s: %s: %v", unitDir, cmdErr.Command, cmdErr.Err)
+			}
+		}
+		writeProblemWithUnits(w, http.StatusBadGateway, "Apply failed", detail, unitsOutcome)
+		return
+	}
+
+	a.removeStoredPlan(params.PlanID)
+	writeJSON(w, http.StatusOK, workspaceApplyResponse{Units: unitsOutcome})
 }

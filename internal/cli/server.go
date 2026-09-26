@@ -41,8 +41,8 @@ func runServer(ctx context.Context, root, addr string, stdout io.Writer) error {
 	defer listener.Close()
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", nodrapi.Handler(root))
-	mux.Handle("/api", nodrapi.Handler(root))
+	mux.Handle("/api/", nodrapi.Handler(ctx, root))
+	mux.Handle("/api", nodrapi.Handler(ctx, root))
 	mux.Handle("/", webui.Handler())
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	serveDone := make(chan error, 1)

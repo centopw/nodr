@@ -6,18 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"maps"
 	"os"
-	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/centopw/nodr/internal/compile"
 	"github.com/centopw/nodr/internal/engine/opentofu"
+	"github.com/centopw/nodr/internal/planapply"
 )
 
 func (a *app) planCommand() *cobra.Command {
@@ -85,17 +82,6 @@ the workspace on disk.`,
 	return cmd
 }
 
-// unitPlan is the saved plan of a state unit.
-type unitPlan struct {
-	// dir is the directory of the unit in the workspace, such as
-	// terraform/pve-main-compute.
-	dir    string
-	runner *opentofu.Runner
-	// file is the path of the saved plan.
-	file string
-	plan opentofu.Plan
-}
-
 // withPlanDir calls f with a new private directory for saved plans, and
 // removes the directory afterwards, since plans can hold secrets.
 func (a *app) withPlanDir(f func(planDir string) error) error {
@@ -116,64 +102,29 @@ func (a *app) withPlanDir(f func(planDir string) error) error {
 // empty, into plan files in planDir. It prints the written files and a
 // summary of each plan to stdout; the output of OpenTofu goes to stderr.
 // It stops at the first unit that fails.
-func (a *app) planUnits(ctx context.Context, only []string, planDir string) ([]unitPlan, error) {
-	// Without OpenTofu there is nothing to plan, and no file should change.
-	bin, err := opentofu.LookPath()
-	if err != nil {
-		return nil, err
-	}
+func (a *app) planUnits(ctx context.Context, only []string, planDir string) ([]planapply.UnitPlan, error) {
 	l, err := a.mustLoad()
 	if err != nil {
 		return nil, err
 	}
-	files, diags := compile.Compile(l.ws)
-	a.printDiagnostics(diags)
-	if diags.HasErrors() {
-		fmt.Fprintf(a.stderr, "nodr: compilation failed; no file was changed\n")
-		return nil, errReported
-	}
-	// Check --unit before any file changes.
-	units, err := stateUnits(l.ws.FS, files)
-	if err != nil {
-		return nil, err
-	}
-	if units, err = selectUnits(units, only); err != nil {
-		return nil, err
-	}
-	// Git is the ledger, so what OpenTofu plans is the code in the workspace.
-	if err := compile.Write(l.ws, files); err != nil {
-		return nil, err
-	}
-	for _, p := range slices.Sorted(maps.Keys(files)) {
+	written, plans, err := planapply.PlanUnits(ctx, l.ws, only, planDir, a.stderr, a.interrupts)
+	for _, p := range slices.Sorted(maps.Keys(written)) {
 		fmt.Fprintf(a.stdout, "wrote %s\n", p)
 	}
-
-	if len(units) == 0 {
+	if err != nil {
+		var compErr *planapply.CompileError
+		if errors.As(err, &compErr) {
+			fmt.Fprintf(a.stderr, "nodr: compilation failed; no file was changed\n")
+			return nil, errReported
+		}
+		return nil, err
+	}
+	if len(plans) == 0 {
 		fmt.Fprintf(a.stdout, "no state units: no directory below %s/ holds .tf files\n", terraformDir)
 		return nil, nil
 	}
-	plans := make([]unitPlan, 0, len(units))
-	for _, dir := range units {
-		u := unitPlan{
-			dir: dir,
-			runner: &opentofu.Runner{
-				Binary:     bin,
-				Dir:        filepath.Join(l.ws.Root, filepath.FromSlash(dir)),
-				Stdout:     a.stderr,
-				Stderr:     a.stderr,
-				Interrupts: a.interrupts,
-			},
-			// Units are right below terraform/, so their names differ.
-			file: filepath.Join(planDir, path.Base(dir)+".tfplan"),
-		}
-		if err := u.runner.Init(ctx); err != nil {
-			return nil, unitError(dir, err)
-		}
-		if u.plan, err = u.runner.Plan(ctx, u.file); err != nil {
-			return nil, unitError(dir, err)
-		}
-		a.printPlan(dir, u.plan)
-		plans = append(plans, u)
+	for _, u := range plans {
+		a.printPlan(u.Dir, u.Plan)
 	}
 	return plans, nil
 }
@@ -186,12 +137,12 @@ func (a *app) apply(ctx context.Context, planDir string, only []string, autoAppr
 	if err != nil {
 		return err
 	}
-	plans = slices.DeleteFunc(plans, func(u unitPlan) bool { return !u.plan.HasChanges() })
+	plans = slices.DeleteFunc(plans, func(u planapply.UnitPlan) bool { return !u.Plan.HasChanges() })
 	if len(plans) == 0 {
 		fmt.Fprintln(a.stdout, "nothing to apply")
 		return nil
 	}
-	if destroyed := destructiveChanges(plans); len(destroyed) > 0 && !allowDestroy {
+	if destroyed := planapply.DestructiveChanges(plans); len(destroyed) > 0 && !allowDestroy {
 		fmt.Fprintln(a.stderr, "nodr: the plan replaces or destroys resources:")
 		for _, line := range destroyed {
 			fmt.Fprintf(a.stderr, "  %s\n", line)
@@ -209,19 +160,21 @@ func (a *app) apply(ctx context.Context, planDir string, only []string, autoAppr
 			return errReported
 		}
 	}
-	for i, u := range plans {
-		if err := u.runner.Apply(ctx, u.file); err != nil {
-			result := "failed"
-			if ctx.Err() != nil {
-				result = "interrupted"
-			}
-			fmt.Fprintf(a.stdout, "%s: %s\n", u.dir, result)
-			for _, rest := range plans[i+1:] {
-				fmt.Fprintf(a.stdout, "%s: not applied\n", rest.dir)
-			}
-			return unitError(u.dir, err)
+	applied, err := planapply.Apply(ctx, plans, a.stderr, a.interrupts)
+	for _, dir := range applied {
+		fmt.Fprintf(a.stdout, "%s: applied\n", dir)
+	}
+	if err != nil {
+		failedDir := plans[len(applied)].Dir
+		result := "failed"
+		if ctx.Err() != nil {
+			result = "interrupted"
 		}
-		fmt.Fprintf(a.stdout, "%s: applied\n", u.dir)
+		fmt.Fprintf(a.stdout, "%s: %s\n", failedDir, result)
+		for _, rest := range plans[len(applied)+1:] {
+			fmt.Fprintf(a.stdout, "%s: not applied\n", rest.Dir)
+		}
+		return err
 	}
 	return nil
 }
@@ -311,83 +264,4 @@ func actionName(action opentofu.Action) string {
 		// replace, read and forget
 		return string(action)
 	}
-}
-
-// destructiveChanges returns a line for each change in plans that replaces
-// or destroys a resource.
-func destructiveChanges(plans []unitPlan) []string {
-	var lines []string
-	for _, u := range plans {
-		for _, c := range u.plan.Changes {
-			if c.Action == opentofu.Replace || c.Action == opentofu.Delete {
-				lines = append(lines, fmt.Sprintf("%s: %s %s", u.dir, actionName(c.Action), c.Address))
-			}
-		}
-	}
-	return lines
-}
-
-// unitError describes a failure of OpenTofu in the unit in dir. OpenTofu
-// wrote its output to stderr already, so a failed command is named without
-// the end of that output, which a CommandError holds.
-func unitError(dir string, err error) error {
-	var cmdErr *opentofu.CommandError
-	if errors.As(err, &cmdErr) {
-		return fmt.Errorf("%s: %s: %w", dir, cmdErr.Command, cmdErr.Err)
-	}
-	return fmt.Errorf("%s: %w", dir, err)
-}
-
-// stateUnits returns the directories of the state units in fsys, the
-// directories right below terraform/ that hold .tf files, in sorted order
-// (design §5.5). Directories further down, such as those of local modules,
-// are not units. pending holds the files that are about to be written, by
-// workspace-relative path, and they can add units.
-func stateUnits(fsys fs.FS, pending map[string][]byte) ([]string, error) {
-	entries, err := fs.ReadDir(fsys, terraformDir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, err
-	}
-	var units []string
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		dir := path.Join(terraformDir, e.Name())
-		files, err := fs.ReadDir(fsys, dir)
-		if err != nil {
-			return nil, err
-		}
-		if slices.ContainsFunc(files, func(f fs.DirEntry) bool { return !f.IsDir() && path.Ext(f.Name()) == ".tf" }) {
-			units = append(units, dir)
-		}
-	}
-	for p := range pending {
-		if dir := path.Dir(p); path.Dir(dir) == terraformDir && path.Ext(p) == ".tf" && !slices.Contains(units, dir) {
-			units = append(units, dir)
-		}
-	}
-	slices.Sort(units)
-	return units, nil
-}
-
-// selectUnits returns the units whose directories are in only, in the order
-// of units, or all units if only is empty. The directories in only are
-// relative to the workspace, as nodr prints them, and may end with a slash.
-func selectUnits(units, only []string) ([]string, error) {
-	if len(only) == 0 {
-		return units, nil
-	}
-	selected := map[string]bool{}
-	for _, dir := range only {
-		dir = path.Clean(filepath.ToSlash(dir))
-		if !slices.Contains(units, dir) {
-			if len(units) == 0 {
-				return nil, fmt.Errorf("%s is not a state unit: no directory below %s/ holds .tf files", dir, terraformDir)
-			}
-			return nil, fmt.Errorf("%s is not a state unit; the units are %s", dir, strings.Join(units, ", "))
-		}
-		selected[dir] = true
-	}
-	return slices.DeleteFunc(slices.Clone(units), func(u string) bool { return !selected[u] }), nil
 }

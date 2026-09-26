@@ -7,10 +7,11 @@ import {
   type VirtualMachine,
   type WorkspaceManifest,
 } from "./api";
+import ChangesPanel from "./ChangesPanel";
 import NewVMForm from "./NewVMForm";
 import VMList from "./VMList";
 
-type View = "list" | "new";
+type View = "list" | "new" | "changes";
 
 interface AppData {
   workspace: string;
@@ -100,6 +101,24 @@ export default function App() {
     }
   }
 
+  async function handleApplied() {
+    if (!data) {
+      return;
+    }
+
+    try {
+      const virtualMachines = await listResources<VirtualMachine>(
+        data.workspace,
+        "VirtualMachine",
+      );
+      setData((current) =>
+        current ? { ...current, virtualMachines } : current,
+      );
+    } catch {
+      // Background refresh failure is non-fatal
+    }
+  }
+
   if (loading) {
     return (
       <main className="app-shell">
@@ -138,15 +157,27 @@ export default function App() {
               <p className="eyebrow">Infrastructure</p>
               <h2 id="vm-list-heading">Virtual machines</h2>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSuccess(null);
-                setView("new");
-              }}
-            >
-              New VM
-            </button>
+            <div className="section-actions">
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => {
+                  setSuccess(null);
+                  setView("changes");
+                }}
+              >
+                Changes
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSuccess(null);
+                  setView("new");
+                }}
+              >
+                New VM
+              </button>
+            </div>
           </div>
 
           {success ? (
@@ -157,7 +188,7 @@ export default function App() {
 
           <VMList virtualMachines={data.virtualMachines} />
         </section>
-      ) : (
+      ) : view === "new" ? (
         <NewVMForm
           workspace={data.workspace}
           environments={environments}
@@ -166,6 +197,12 @@ export default function App() {
           networks={data.networks}
           onCreated={handleCreated}
           onCancel={() => setView("list")}
+        />
+      ) : (
+        <ChangesPanel
+          workspace={data.workspace}
+          onApplied={handleApplied}
+          onBack={() => setView("list")}
         />
       )}
     </main>

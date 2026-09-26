@@ -67,6 +67,7 @@ export interface ProblemDetails {
   status: number;
   detail: string;
   errors?: FieldError[];
+  units?: ApplyUnitOutcome[];
 }
 
 export class ProblemError extends Error {
@@ -121,6 +122,81 @@ export function createVM(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: "vm.create", params }),
+    },
+  );
+}
+
+export type ChangeAction =
+  | "create"
+  | "update"
+  | "replace"
+  | "delete"
+  | "read"
+  | "forget";
+
+export interface PlanChange {
+  address: string;
+  action: ChangeAction;
+}
+
+export interface PlanUnitSummary {
+  create: number;
+  update: number;
+  replace: number;
+  delete: number;
+}
+
+export interface PlanUnit {
+  dir: string;
+  hasChanges: boolean;
+  summary: PlanUnitSummary;
+  destructive: boolean;
+  changes: PlanChange[];
+}
+
+export interface PlanResult {
+  planId: string;
+  units: PlanUnit[];
+  hasChanges: boolean;
+  hasDestructiveChanges: boolean;
+}
+
+export type ApplyOutcome = "applied" | "failed" | "not applied";
+
+export interface ApplyUnitOutcome {
+  dir: string;
+  outcome: ApplyOutcome;
+}
+
+export interface ApplyResult {
+  units: ApplyUnitOutcome[];
+}
+
+export function planChanges(workspace: string): Promise<PlanResult> {
+  return fetchJSON(
+    `${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: "workspace.plan", params: {} }),
+    },
+  );
+}
+
+export function applyChanges(
+  workspace: string,
+  planId: string,
+  allowDestroy: boolean,
+): Promise<ApplyResult> {
+  return fetchJSON(
+    `${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        command: "workspace.apply",
+        params: { planId, allowDestroy },
+      }),
     },
   );
 }
