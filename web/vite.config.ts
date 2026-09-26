@@ -5,6 +5,6 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "../internal/webui/dist",
-    emptyOutDir: true,
-  },
+    emptyOutDir: true
+  }
 });

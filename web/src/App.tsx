@@ -7,6 +7,8 @@ import {
   type VirtualMachine,
   type WorkspaceManifest,
 } from "./api";
+import Banner from "./components/Banner";
+import Button from "./components/Button";
 import ChangesPanel from "./ChangesPanel";
 import NewVMForm from "./NewVMForm";
 import VMList from "./VMList";
@@ -130,9 +132,7 @@ export default function App() {
   if (loadError || !data) {
     return (
       <main className="app-shell">
-        <div className="message message-error" role="alert">
-          {loadError ?? "Unable to load nodr."}
-        </div>
+        <Banner variant="error">{loadError ?? "Unable to load nodr."}</Banner>
       </main>
     );
   }
@@ -156,33 +156,27 @@ export default function App() {
               <h2 id="vm-list-heading">Virtual machines</h2>
             </div>
             <div className="section-actions">
-              <button
-                type="button"
-                className="button-secondary"
+              <Button
+                variant="secondary"
                 onClick={() => {
                   setSuccess(null);
                   setView("changes");
                 }}
               >
                 Changes
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
                 onClick={() => {
                   setSuccess(null);
                   setView("new");
                 }}
               >
                 New VM
-              </button>
+              </Button>
             </div>
           </div>
 
-          {success ? (
-            <div className="message message-success" role="status">
-              {success}
-            </div>
-          ) : null}
+          {success ? <Banner variant="success">{success}</Banner> : null}
 
           <VMList
             virtualMachines={data.virtualMachines}
