@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/nrm"
@@ -121,8 +123,12 @@ func decodeResponse(t *testing.T, response *httptest.ResponseRecorder, out any) 
 	}
 }
 
+func testHandler(t *testing.T, root string) http.Handler {
+	return Handler(t.Context(), root)
+}
+
 func TestListWorkspaces(t *testing.T) {
-	response := request(t, Handler(testWorkspace(t)), http.MethodGet, "/api/v1/workspaces", nil)
+	response := request(t, testHandler(t, testWorkspace(t)), http.MethodGet, "/api/v1/workspaces", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -135,7 +141,7 @@ func TestListWorkspaces(t *testing.T) {
 }
 
 func TestGetWorkspace(t *testing.T) {
-	handler := Handler(testWorkspace(t))
+	handler := testHandler(t, testWorkspace(t))
 	response := request(t, handler, http.MethodGet, "/api/v1/workspaces/homelab", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -168,7 +174,7 @@ func TestGetWorkspace(t *testing.T) {
 }
 
 func TestListResources(t *testing.T) {
-	handler := Handler(testWorkspace(t))
+	handler := testHandler(t, testWorkspace(t))
 	tests := map[string]any{
 		"VirtualMachine": map[string]any{
 			"items": []any{map[string]any{
@@ -218,7 +224,7 @@ spec:
 	if err := os.WriteFile(filepath.Join(root, "intent", "compute", "web-02.yaml"), []byte(pending), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	response := request(t, Handler(root), http.MethodGet, "/api/v1/workspaces/homelab/resources?kind=VirtualMachine", nil)
+	response := request(t, testHandler(t, root), http.MethodGet, "/api/v1/workspaces/homelab/resources?kind=VirtualMachine", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -240,7 +246,7 @@ spec:
 	}
 }
 func TestAPIPathAndMethodErrorsUseProblemDetails(t *testing.T) {
-	handler := Handler(testWorkspace(t))
+	handler := testHandler(t, testWorkspace(t))
 	for _, test := range []struct {
 		name   string
 		method string
@@ -270,7 +276,7 @@ func validCreateCommand() map[string]any {
 
 func TestCreateVM(t *testing.T) {
 	root := testWorkspace(t)
-	response := request(t, Handler(root), http.MethodPost, "/api/v1/workspaces/homelab/commands", validCreateCommand())
+	response := request(t, testHandler(t, root), http.MethodPost, "/api/v1/workspaces/homelab/commands", validCreateCommand())
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -369,7 +375,7 @@ func TestCreateVMValidation(t *testing.T) {
 			root := testWorkspace(t)
 			command := validCreateCommand()
 			command["params"].(map[string]any)[test.field] = test.value
-			response := request(t, Handler(root), http.MethodPost, "/api/v1/workspaces/homelab/commands", command)
+			response := request(t, testHandler(t, root), http.MethodPost, "/api/v1/workspaces/homelab/commands", command)
 			checkProblem(t, response, test.status, "", test.path, test.messageHas)
 			if _, err := os.Stat(filepath.Join(root, "intent", "compute", "web-03.yaml")); !os.IsNotExist(err) {
 				t.Errorf("invalid request left an intent file: %v", err)
@@ -380,7 +386,7 @@ func TestCreateVMValidation(t *testing.T) {
 
 func TestCreateVMRejectsUnknownCommand(t *testing.T) {
 	root := testWorkspace(t)
-	response := request(t, Handler(root), http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{"command": "vm.delete"})
+	response := request(t, testHandler(t, root), http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{"command": "vm.delete"})
 	checkProblem(t, response, http.StatusBadRequest, "Unknown command", "command", "vm.delete")
 }
 
@@ -429,7 +435,7 @@ func TestCreateVMSerializesAdmission(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "intent", "network", "dmz.yaml"), []byte(network), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	handler := Handler(root)
+	handler := testHandler(t, root)
 	responses := make([]*httptest.ResponseRecorder, 2)
 	var wait sync.WaitGroup
 	for i, name := range []string{"web-03", "web-04"} {
@@ -467,7 +473,7 @@ func TestCreateVMRollsBackAdmissionError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "nodr.yaml"), []byte(exhausted), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	response := request(t, Handler(root), http.MethodPost, "/api/v1/workspaces/homelab/commands", validCreateCommand())
+	response := request(t, testHandler(t, root), http.MethodPost, "/api/v1/workspaces/homelab/commands", validCreateCommand())
 	checkProblem(t, response, http.StatusBadRequest, "Admission failed", "spec.identity.vmid", "uses every ID")
 	if _, err := os.Stat(filepath.Join(root, "intent", "compute", "web-03.yaml")); !os.IsNotExist(err) {
 		t.Errorf("admission failure left an intent file: %v", err)
@@ -524,4 +530,395 @@ func checkProblem(t *testing.T, response *httptest.ResponseRecorder, status int,
 	} else if messageHas != "" && !strings.Contains(problem.Detail, messageHas) {
 		t.Errorf("detail = %q, want it to contain %q", problem.Detail, messageHas)
 	}
+}
+
+const fakeTofuScript = `#!/bin/sh
+unit=$(pwd -P)
+unit=${unit##*/}
+echo "$unit $*" >> "$FAKE_TOFU_LOG"
+for arg in "$@"; do last=$arg; done
+if [ "$FAKE_TOFU_FAIL" = "$unit $1" ]; then
+	echo "Error: $1 failed in $unit" >&2
+	exit 1
+fi
+case $1 in
+init)
+	echo "initialized $unit"
+	;;
+plan)
+	for arg in "$@"; do
+		case $arg in -out=*) plan=${arg#-out=} ;; esac
+	done
+	echo "plan of $unit" > "$plan"
+	echo "planned $unit"
+	;;
+show | apply)
+	if [ "$(cat "$last")" != "plan of $unit" ]; then
+		echo "Error: $last is not a saved plan of $unit" >&2
+		exit 1
+	fi
+	if [ "$1" = apply ]; then
+		echo "applied $unit"
+	elif [ -f "$FAKE_TOFU_PLANS/$unit.json" ]; then
+		cat "$FAKE_TOFU_PLANS/$unit.json"
+	else
+		echo '{"format_version": "1.2", "resource_changes": []}'
+	fi
+	;;
+*)
+	echo "Error: unexpected command $1" >&2
+	exit 1
+	;;
+esac
+`
+
+type fakeTofu struct {
+	log, plans string
+}
+
+func installFakeTofu(t *testing.T) *fakeTofu {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake tofu is a shell script")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tofu")
+	if err := os.WriteFile(bin, []byte(fakeTofuScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTofu{log: filepath.Join(dir, "calls.log"), plans: filepath.Join(dir, "plans")}
+	if err := os.Mkdir(f.plans, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NODR_TOFU", bin)
+	t.Setenv("FAKE_TOFU_LOG", f.log)
+	t.Setenv("FAKE_TOFU_PLANS", f.plans)
+	t.Setenv("FAKE_TOFU_FAIL", "")
+	return f
+}
+
+//nolint:unparam // unit is parameterized for test versatility across different state units
+func (f *fakeTofu) setPlan(t *testing.T, unit string, changes ...string) {
+	t.Helper()
+	type resourceChange struct {
+		Address string `json:"address"`
+		Type    string `json:"type"`
+		Change  struct {
+			Actions []string `json:"actions"`
+		} `json:"change"`
+	}
+	plan := struct {
+		FormatVersion   string           `json:"format_version"`
+		ResourceChanges []resourceChange `json:"resource_changes"`
+	}{FormatVersion: "1.2", ResourceChanges: []resourceChange{}}
+	for _, c := range changes {
+		fields := strings.Fields(c)
+		rc := resourceChange{Address: fields[1]}
+		rc.Type, _, _ = strings.Cut(rc.Address, ".")
+		rc.Change.Actions = strings.Split(fields[0], ",")
+		plan.ResourceChanges = append(plan.ResourceChanges, rc)
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.plans, unit+".json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkspacePlan(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := testWorkspace(t)
+	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
+
+	handler := testHandler(t, root)
+	cmd := map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	}
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", cmd)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var planResp workspacePlanResponse
+	decodeResponse(t, res, &planResp)
+	if planResp.PlanID == "" {
+		t.Errorf("planId is empty")
+	}
+	if !planResp.HasChanges {
+		t.Errorf("expected HasChanges = true")
+	}
+	if planResp.HasDestructiveChanges {
+		t.Errorf("expected HasDestructiveChanges = false")
+	}
+	if len(planResp.Units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(planResp.Units))
+	}
+	u := planResp.Units[0]
+	if u.Dir != "terraform/pve-main-compute" {
+		t.Errorf("u.Dir = %q, want terraform/pve-main-compute", u.Dir)
+	}
+	if !u.HasChanges || u.Destructive {
+		t.Errorf("u.HasChanges = %v, u.Destructive = %v", u.HasChanges, u.Destructive)
+	}
+	if u.Summary.Create != 1 {
+		t.Errorf("u.Summary.Create = %d, want 1", u.Summary.Create)
+	}
+	if len(u.Changes) != 1 || u.Changes[0].Action != "create" || u.Changes[0].Address != "proxmox_virtual_environment_vm.web_01" {
+		t.Errorf("u.Changes = %#v", u.Changes)
+	}
+}
+
+func TestWorkspacePlanNoChanges(t *testing.T) {
+	installFakeTofu(t)
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	cmd := map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	}
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", cmd)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var planResp workspacePlanResponse
+	decodeResponse(t, res, &planResp)
+	if planResp.HasChanges {
+		t.Errorf("expected HasChanges = false")
+	}
+	if len(planResp.Units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(planResp.Units))
+	}
+	if planResp.Units[0].HasChanges {
+		t.Errorf("expected unit HasChanges = false")
+	}
+	if len(planResp.Units[0].Changes) != 0 {
+		t.Errorf("expected empty changes, got %#v", planResp.Units[0].Changes)
+	}
+}
+
+func TestWorkspacePlanCompileError(t *testing.T) {
+	installFakeTofu(t)
+	root := testWorkspace(t)
+	vmFile := filepath.Join(root, "intent", "compute", "web-01.yaml")
+	data, _ := os.ReadFile(vmFile)
+	badData := strings.Replace(string(data), ", assignedNode: pve1", "", 1)
+	if err := os.WriteFile(vmFile, []byte(badData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := testHandler(t, root)
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	})
+	checkProblem(t, res, http.StatusBadRequest, "Compilation failed", "", "")
+}
+
+func TestWorkspacePlanMissingTofu(t *testing.T) {
+	root := testWorkspace(t)
+	t.Setenv("NODR_TOFU", "")
+	t.Setenv("PATH", t.TempDir())
+	handler := testHandler(t, root)
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	})
+	checkProblem(t, res, http.StatusServiceUnavailable, "OpenTofu not found", "", "OpenTofu is not installed or not on PATH; install it or set NODR_TOFU")
+}
+
+func TestWorkspacePlanUnitCommandFails(t *testing.T) {
+	installFakeTofu(t)
+	root := testWorkspace(t)
+	t.Setenv("FAKE_TOFU_FAIL", "pve-main-compute init")
+	handler := testHandler(t, root)
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	})
+	checkProblem(t, res, http.StatusBadGateway, "OpenTofu error", "", "init failed in pve-main-compute")
+}
+
+func TestWorkspacePlanConflict(t *testing.T) {
+	installFakeTofu(t)
+	root := testWorkspace(t)
+	s := &server{
+		ctx:   t.Context(),
+		root:  root,
+		plans: make(map[string]*storedPlan),
+	}
+	s.planMu.Lock()
+	defer s.planMu.Unlock()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", strings.NewReader(`{"command":"workspace.plan","params":{}}`))
+	r.SetPathValue("workspace", "homelab")
+	s.runCommand(w, r)
+	checkProblem(t, w, http.StatusConflict, "Conflict", "", "another plan or apply is already running")
+}
+
+func TestWorkspaceApplySuccess(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := testWorkspace(t)
+	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
+	handler := testHandler(t, root)
+
+	// Step 1: plan
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("plan status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var planResp workspacePlanResponse
+	decodeResponse(t, res, &planResp)
+
+	// Step 2: apply
+	applyRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{"planId": planResp.PlanID},
+	})
+	if applyRes.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, body = %s", applyRes.Code, applyRes.Body.String())
+	}
+	var applyResp workspaceApplyResponse
+	decodeResponse(t, applyRes, &applyResp)
+	if len(applyResp.Units) != 1 || applyResp.Units[0].Dir != "terraform/pve-main-compute" || applyResp.Units[0].Outcome != "applied" {
+		t.Errorf("applyResp.Units = %#v", applyResp.Units)
+	}
+
+	// Step 3: second apply should fail with 404
+	reApplyRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{"planId": planResp.PlanID},
+	})
+	checkProblem(t, reApplyRes, http.StatusNotFound, "Plan not found", "", "")
+}
+
+func TestWorkspaceApplyValidation(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{},
+	})
+	checkProblem(t, res, http.StatusBadRequest, "Invalid request", "params.planId", "required")
+
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{"planId": "nonexistent"},
+	})
+	checkProblem(t, res, http.StatusNotFound, "Plan not found", "", "nonexistent")
+}
+
+func TestWorkspaceApplyExpiry(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := testWorkspace(t)
+	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
+	s := &server{
+		ctx:   t.Context(),
+		root:  root,
+		plans: make(map[string]*storedPlan),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+apiPrefix+"/workspaces/{workspace}/commands", s.runCommand)
+
+	planRes := request(t, mux, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	})
+	var planResp workspacePlanResponse
+	decodeResponse(t, planRes, &planResp)
+
+	s.plansMu.Lock()
+	s.plans[planResp.PlanID].createdAt = time.Now().Add(-16 * time.Minute)
+	s.plansMu.Unlock()
+
+	applyRes := request(t, mux, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{"planId": planResp.PlanID},
+	})
+	checkProblem(t, applyRes, http.StatusNotFound, "Plan not found", "", "expired")
+}
+
+func TestWorkspaceApplyDestructiveRejection(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := testWorkspace(t)
+	tofu.setPlan(t, "pve-main-compute", "delete proxmox_virtual_environment_vm.web_01")
+	handler := testHandler(t, root)
+
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	})
+	var planResp workspacePlanResponse
+	decodeResponse(t, res, &planResp)
+	if !planResp.HasDestructiveChanges {
+		t.Fatalf("expected HasDestructiveChanges = true")
+	}
+
+	applyRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{"planId": planResp.PlanID, "allowDestroy": false},
+	})
+	checkProblem(t, applyRes, http.StatusBadRequest, "Destructive changes require approval", "", "replaces or destroys resources")
+
+	applyRes = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{"planId": planResp.PlanID, "allowDestroy": true},
+	})
+	if applyRes.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", applyRes.Code, applyRes.Body.String())
+	}
+}
+
+func TestWorkspaceApplyCommandFails(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := testWorkspace(t)
+	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
+	handler := testHandler(t, root)
+
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.plan",
+		"params":  map[string]any{},
+	})
+	var planResp workspacePlanResponse
+	decodeResponse(t, res, &planResp)
+
+	t.Setenv("FAKE_TOFU_FAIL", "pve-main-compute apply")
+	applyRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "workspace.apply",
+		"params":  map[string]any{"planId": planResp.PlanID},
+	})
+	if applyRes.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502, body = %s", applyRes.Code, applyRes.Body.String())
+	}
+	var prob problem
+	decodeResponse(t, applyRes, &prob)
+	if len(prob.Units) != 1 || prob.Units[0].Outcome != "failed" {
+		t.Errorf("prob.Units = %#v", prob.Units)
+	}
+	if !strings.Contains(prob.Detail, "apply failed in pve-main-compute") {
+		t.Errorf("prob.Detail = %q, want to contain apply failed", prob.Detail)
+	}
+}
+
+func TestWorkspaceApplyConflict(t *testing.T) {
+	installFakeTofu(t)
+	root := testWorkspace(t)
+	s := &server{
+		ctx:   t.Context(),
+		root:  root,
+		plans: make(map[string]*storedPlan),
+	}
+	s.planMu.Lock()
+	defer s.planMu.Unlock()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", strings.NewReader(`{"command":"workspace.apply","params":{"planId":"01HXYZ"}}`))
+	r.SetPathValue("workspace", "homelab")
+	s.runCommand(w, r)
+	checkProblem(t, w, http.StatusConflict, "Conflict", "", "another plan or apply is already running")
 }
