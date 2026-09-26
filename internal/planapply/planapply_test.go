@@ -206,7 +206,7 @@ func TestPlanUnitsSuccess(t *testing.T) {
 
 	planDir := t.TempDir()
 	var out strings.Builder
-	written, plans, err := PlanUnits(context.Background(), ws, nil, planDir, &out, nil)
+	written, plans, err := PlanUnits(context.Background(), ws, nil, planDir, &out, nil, nil)
 	if err != nil {
 		t.Fatalf("PlanUnits failed: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestPlanUnitsLookPathError(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	planDir := t.TempDir()
-	_, _, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil)
+	_, _, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil, nil)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -255,7 +255,7 @@ func TestPlanUnitsCompileError(t *testing.T) {
 	})
 	ws := loadWorkspace(t, root)
 	planDir := t.TempDir()
-	_, _, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil)
+	_, _, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil, nil)
 	if err == nil {
 		t.Fatalf("expected compile error, got nil")
 	}
@@ -279,7 +279,7 @@ func TestPlanUnitsCommandFails(t *testing.T) {
 	t.Setenv("FAKE_TOFU_FAIL", "pve-main-compute init")
 
 	planDir := t.TempDir()
-	_, _, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil)
+	_, _, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil, nil)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -308,7 +308,7 @@ func TestApplySuccessAndFailure(t *testing.T) {
 	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
 
 	planDir := t.TempDir()
-	_, plans, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil)
+	_, plans, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("PlanUnits: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestApplySuccessAndFailure(t *testing.T) {
 	}
 
 	// Successful apply
-	applied, err := Apply(context.Background(), plans, nil, nil)
+	applied, err := Apply(context.Background(), plans, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestApplySuccessAndFailure(t *testing.T) {
 
 	// Failure on second unit
 	t.Setenv("FAKE_TOFU_FAIL", "pve-main-compute apply")
-	applied, err = Apply(context.Background(), plans, nil, nil)
+	applied, err = Apply(context.Background(), plans, nil, nil, nil)
 	if err == nil {
 		t.Fatalf("expected error from Apply")
 	}
@@ -361,5 +361,118 @@ func TestDestructiveChanges(t *testing.T) {
 	}
 	if !slices.Equal(destructive, want) {
 		t.Errorf("DestructiveChanges = %v, want %v", destructive, want)
+	}
+}
+
+func TestPlanUnits_ResolvesCredentialsAndSetsRunnerEnv(t *testing.T) {
+	tofu := installFakeTofu(t)
+	root := writeWorkspace(t, map[string]string{
+		"nodr.yaml":                manifest,
+		"intent/platform/pve.yaml": platformYAML,
+		"intent/compute/web.yaml":  computeYAML,
+	})
+	ws := loadWorkspace(t, root)
+	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
+
+	var resolvedRef string
+	fakeSecret := "root@pam!token=1111-2222-3333"
+	mockResolver := func(ctx context.Context, ref string) ([]byte, error) {
+		resolvedRef = ref
+		return []byte(fakeSecret), nil
+	}
+
+	planDir := t.TempDir()
+	var out strings.Builder
+	_, plans, err := PlanUnits(context.Background(), ws, nil, planDir, &out, nil, mockResolver)
+	if err != nil {
+		t.Fatalf("PlanUnits: %v", err)
+	}
+	if resolvedRef != "proxmox/pve-main-token" {
+		t.Errorf("resolvedRef = %q, want proxmox/pve-main-token", resolvedRef)
+	}
+	if len(plans) != 1 {
+		t.Fatalf("expected 1 plan, got %d", len(plans))
+	}
+	wantEnv := "PROXMOX_VE_API_TOKEN=" + fakeSecret
+	if !slices.Contains(plans[0].Runner.Env, wantEnv) {
+		t.Errorf("Runner.Env = %v, want it to contain %q", plans[0].Runner.Env, wantEnv)
+	}
+}
+
+func TestPlanUnits_ResolverFailureStopsPlan(t *testing.T) {
+	installFakeTofu(t)
+	root := writeWorkspace(t, map[string]string{
+		"nodr.yaml":                manifest,
+		"intent/platform/pve.yaml": platformYAML,
+		"intent/compute/web.yaml":  computeYAML,
+	})
+	ws := loadWorkspace(t, root)
+
+	mockResolver := func(ctx context.Context, ref string) ([]byte, error) {
+		return nil, errors.New("key store unavailable")
+	}
+
+	planDir := t.TempDir()
+	_, _, err := PlanUnits(context.Background(), ws, nil, planDir, nil, nil, mockResolver)
+	if err == nil {
+		t.Fatalf("expected error from resolver failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "key store unavailable") {
+		t.Errorf("err = %v, want to contain 'key store unavailable'", err)
+	}
+}
+
+func TestApply_NilRunnerReturnsError(t *testing.T) {
+	plans := []UnitPlan{
+		{
+			Dir:    "terraform/compute",
+			Runner: nil,
+		},
+	}
+	_, err := Apply(context.Background(), plans, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error when runner is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "unit plan has no runner") {
+		t.Errorf("err = %v, want unit plan has no runner", err)
+	}
+}
+
+func TestRedactor_WritePreservesLengthAndReplacesSecrets(t *testing.T) {
+	var buf strings.Builder
+	secret := []byte("super-secret-token")
+	r := newRedactor(&buf, [][]byte{secret})
+
+	input := []byte("connecting with token super-secret-token to server")
+	n, err := r.Write(input)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != len(input) {
+		t.Errorf("Write returned n = %d, want len(input) = %d", n, len(input))
+	}
+	got := buf.String()
+	want := "connecting with token <redacted> to server"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestScrubCommandError_ReplacesSecretsInStderr(t *testing.T) {
+	secret := []byte("pve-secret-key-42")
+	cmdErr := &opentofu.CommandError{
+		Command: "init",
+		Stderr:  "failed to auth with PROXMOX_VE_API_TOKEN=pve-secret-key-42: forbidden",
+	}
+	scrubbed := scrubCommandError(cmdErr, [][]byte{secret})
+	var res *opentofu.CommandError
+	if !errors.As(scrubbed, &res) {
+		t.Fatalf("expected *opentofu.CommandError, got %T", scrubbed)
+	}
+	if strings.Contains(res.Stderr, "pve-secret-key-42") {
+		t.Errorf("Stderr still contains secret: %q", res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "<redacted>") {
+		t.Errorf("Stderr missing <redacted>: %q", res.Stderr)
 	}
 }

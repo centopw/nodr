@@ -16,6 +16,8 @@ import (
 	"github.com/centopw/nodr/internal/compile"
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/engine/opentofu"
+	"github.com/centopw/nodr/internal/nrm"
+	"github.com/centopw/nodr/internal/nrm/v1alpha1"
 	"github.com/centopw/nodr/internal/workspace"
 )
 
@@ -27,6 +29,24 @@ type UnitPlan struct {
 	Runner *opentofu.Runner
 	File   string // path of the saved plan file
 	Plan   opentofu.Plan
+}
+
+// Resolver resolves a credentialsRef to its secret value. secrets.Store's
+// Resolve method satisfies this directly. A nil Resolver injects no
+// credentials, matching the behavior before this type existed.
+type Resolver func(ctx context.Context, ref string) ([]byte, error)
+
+// credentialsRefFor returns the credentialsRef for the given cluster in ws, if found.
+func credentialsRefFor(ws *workspace.Workspace, cluster string) (string, bool) {
+	d := ws.Find(nrm.Ref{Kind: v1alpha1.KindProxmoxCluster, Name: cluster})
+	if d == nil {
+		return "", false
+	}
+	spec, err := v1alpha1.Decode[v1alpha1.ProxmoxClusterSpec](d)
+	if err != nil || spec.Spec.CredentialsRef == "" {
+		return "", false
+	}
+	return spec.Spec.CredentialsRef, true
 }
 
 // CompileError indicates that compiling intent produced error diagnostics.
@@ -134,12 +154,12 @@ func SelectUnits(units, only []string) ([]string, error) {
 // written (workspace-relative path -> content) so the caller can report
 // them, and the plans, in unit order. It stops at the first unit that
 // fails.
-func PlanUnits(ctx context.Context, ws *workspace.Workspace, only []string, planDir string, out io.Writer, interrupts <-chan struct{}) (written map[string][]byte, plans []UnitPlan, err error) {
+func PlanUnits(ctx context.Context, ws *workspace.Workspace, only []string, planDir string, out io.Writer, interrupts <-chan struct{}, resolve Resolver) (written map[string][]byte, plans []UnitPlan, err error) {
 	bin, err := opentofu.LookPath()
 	if err != nil {
 		return nil, nil, err
 	}
-	files, _, diags := compile.Compile(ws)
+	files, unitClusters, diags := compile.Compile(ws)
 	if out != nil {
 		for _, d := range diags {
 			fmt.Fprintln(out, d)
@@ -164,22 +184,37 @@ func PlanUnits(ctx context.Context, ws *workspace.Workspace, only []string, plan
 	}
 	plans = make([]UnitPlan, 0, len(units))
 	for _, dir := range units {
+		var env []string
+		var secrets [][]byte
+		if resolve != nil {
+			if cluster := unitClusters[dir]; cluster != "" {
+				if ref, ok := credentialsRefFor(ws, cluster); ok {
+					secret, err := resolve(ctx, ref)
+					if err != nil {
+						return files, nil, UnitError(dir, fmt.Errorf("resolve credentials for cluster %s: %w", cluster, err))
+					}
+					env = []string{"PROXMOX_VE_API_TOKEN=" + string(secret)}
+					secrets = append(secrets, secret)
+				}
+			}
+		}
 		u := UnitPlan{
 			Dir: dir,
 			Runner: &opentofu.Runner{
 				Binary:     bin,
 				Dir:        filepath.Join(ws.Root, filepath.FromSlash(dir)),
-				Stdout:     out,
-				Stderr:     out,
+				Stdout:     newRedactor(out, secrets),
+				Stderr:     newRedactor(out, secrets),
+				Env:        env,
 				Interrupts: interrupts,
 			},
 			File: filepath.Join(planDir, path.Base(dir)+".tfplan"),
 		}
 		if err := u.Runner.Init(ctx); err != nil {
-			return files, nil, UnitError(dir, err)
+			return files, nil, UnitError(dir, scrubCommandError(err, secrets))
 		}
 		if u.Plan, err = u.Runner.Plan(ctx, u.File); err != nil {
-			return files, nil, UnitError(dir, err)
+			return files, nil, UnitError(dir, scrubCommandError(err, secrets))
 		}
 		plans = append(plans, u)
 	}
@@ -189,22 +224,26 @@ func PlanUnits(ctx context.Context, ws *workspace.Workspace, only []string, plan
 // Apply applies the saved plan of each unit in plans, in order, stopping
 // at the first failure. Output goes to out (may be nil). Returns the
 // directories that were applied successfully before any failure.
-func Apply(ctx context.Context, plans []UnitPlan, out io.Writer, interrupts <-chan struct{}) (applied []string, err error) {
+func Apply(ctx context.Context, plans []UnitPlan, out io.Writer, interrupts <-chan struct{}, _ Resolver) (applied []string, err error) {
 	applied = make([]string, 0, len(plans))
 	for _, u := range plans {
 		runner := u.Runner
 		if runner == nil {
-			var err error
-			runner, err = opentofu.NewRunner(u.Dir)
-			if err != nil {
-				return applied, UnitError(u.Dir, err)
+			return applied, UnitError(u.Dir, errors.New("unit plan has no runner"))
+		}
+		var secrets [][]byte
+		if len(runner.Env) > 0 {
+			for _, kv := range runner.Env {
+				if strings.HasPrefix(kv, "PROXMOX_VE_API_TOKEN=") {
+					secrets = append(secrets, []byte(strings.TrimPrefix(kv, "PROXMOX_VE_API_TOKEN=")))
+				}
 			}
 		}
-		runner.Stdout = out
-		runner.Stderr = out
+		runner.Stdout = newRedactor(out, secrets)
+		runner.Stderr = newRedactor(out, secrets)
 		runner.Interrupts = interrupts
 		if err := runner.Apply(ctx, u.File); err != nil {
-			return applied, UnitError(u.Dir, err)
+			return applied, UnitError(u.Dir, scrubCommandError(err, secrets))
 		}
 		applied = append(applied, u.Dir)
 	}

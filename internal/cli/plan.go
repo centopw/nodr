@@ -107,7 +107,7 @@ func (a *app) planUnits(ctx context.Context, only []string, planDir string) ([]p
 	if err != nil {
 		return nil, err
 	}
-	written, plans, err := planapply.PlanUnits(ctx, l.ws, only, planDir, a.stderr, a.interrupts)
+	written, plans, err := planapply.PlanUnits(ctx, l.ws, only, planDir, a.stderr, a.interrupts, nil)
 	for _, p := range slices.Sorted(maps.Keys(written)) {
 		fmt.Fprintf(a.stdout, "wrote %s\n", p)
 	}
@@ -160,7 +160,7 @@ func (a *app) apply(ctx context.Context, planDir string, only []string, autoAppr
 			return errReported
 		}
 	}
-	applied, err := planapply.Apply(ctx, plans, a.stderr, a.interrupts)
+	applied, err := planapply.Apply(ctx, plans, a.stderr, a.interrupts, nil)
 	for _, dir := range applied {
 		fmt.Fprintf(a.stdout, "%s: applied\n", dir)
 	}

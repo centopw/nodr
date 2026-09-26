@@ -918,7 +918,7 @@ func (a *server) planWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, plans, err := planapply.PlanUnits(r.Context(), ws, nil, planDir, nil, nil)
+	_, plans, err := planapply.PlanUnits(r.Context(), ws, nil, planDir, nil, nil, nil)
 	if err != nil {
 		_ = os.RemoveAll(planDir)
 		var compErr *planapply.CompileError
@@ -1038,7 +1038,7 @@ func (a *server) applyWorkspace(w http.ResponseWriter, params workspaceApplyPara
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	applied, err := planapply.Apply(ctx, stored.plans, nil, nil)
+	applied, err := planapply.Apply(ctx, stored.plans, nil, nil, nil)
 	unitsOutcome := make([]applyUnitOutcome, 0, len(stored.plans))
 	for i, u := range stored.plans {
 		switch {
