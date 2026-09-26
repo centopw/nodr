@@ -27,6 +27,16 @@ this slice. Verification is unit and integration tests only.
 - Secret rotation workflows.
 - Multi-workspace/global secret stores — one store per workspace, matching the
   existing `nodr.yaml`-scoped model.
+- **Wiring `secrets.Store.Resolve` output into `opentofu.Runner.Env`.**
+  `internal/planapply` constructs `opentofu.Runner{Binary, Dir, Stdout}` today
+  with no `Env` at all (confirmed: `planapply.go:168-172`), so
+  `ProxmoxCluster.spec.credentialsRef` is declared in intent but never
+  resolved or turned into `PROXMOX_VE_API_TOKEN` for any workspace, adopted or
+  not. This slice builds `Resolve()` but does not call it from
+  `planapply` — that wiring lands in **slice B**, the first slice where a real
+  API token exists to inject. Until then, real `tofu plan`/`apply` against a
+  live cluster still requires the operator to export
+  `PROXMOX_VE_API_TOKEN` manually, exactly as today.
 
 ## `internal/proxmox`
 
@@ -62,6 +72,21 @@ type APIError struct {
 }
 func (e *APIError) Error() string
 ```
+
+### Transport hardening
+
+- Every request takes a `context.Context`; the client never starts a request
+  without one and never applies its own hidden default timeout — the caller
+  (slice B/C/D code, or a test) controls cancellation/timeout via `ctx`.
+- `APIError.Error()` and any wrapped/logged error never includes the request's
+  `Authorization` header value, the ticket, the CSRF token, or an API token
+  secret — these are redacted (e.g. `PVEAPIToken=<redacted>`) before an error
+  is formatted or logged. Applies to both auth modes.
+- TLS fingerprint mismatch (checked once pinning is wired up, starting slice
+  B) is a distinct typed error, `ErrFingerprintMismatch`, never surfaced as a
+  generic `*APIError` or bare `x509` error — callers must be able to
+  distinguish "wrong/rotated certificate" from "ordinary HTTP failure" to
+  drive the correct UX (re-confirm vs. retry).
 
 ### Endpoints (typed methods, one per REST call)
 
