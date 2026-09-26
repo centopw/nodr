@@ -9,9 +9,13 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- `nodr server` serves the web UI and a REST API for listing workspaces and
+  virtual machines and creating admitted virtual-machine intent.
 - Admission derives deterministic MAC addresses from each resource UID and
   the cluster MAC prefix, and allocates template guest IDs from the
   workspace's `templates` environment range.
+- A React and Vite web UI for listing existing virtual machines and creating
+  new ones through the public API.
 
 ### Fixed
 

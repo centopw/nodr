@@ -103,6 +103,7 @@ disk.`,
 		a.describeCommand(),
 		a.planCommand(),
 		a.applyCommand(),
+		a.serverCommand(),
 	)
 	return root
 }

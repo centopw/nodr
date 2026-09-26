@@ -24,6 +24,10 @@ linters:
     generated: strict
     presets:
       - std-error-handling
+    rules:
+      - path: internal/api/
+        linters: [revive]
+        text: "avoid meaningless package names"
 
 formatters:
   enable:
