@@ -1,12 +1,13 @@
 // Package admission fills in the values that nodr allocates for virtual
-// machines (design §3.7 and §3.9): the UID, the node, the Proxmox guest ID
-// and IPv4 addresses. It chooses them from the loaded workspace alone, so
-// the same workspace always gets the same values, apart from new UIDs, and
-// writes them into the intent files with minimal edits.
+// machines and templates (design §3.7 and §3.9): UIDs, nodes, Proxmox guest
+// IDs, IPv4 addresses and MAC addresses. It chooses them from the loaded
+// workspace alone, so the same workspace always gets the same values, apart
+// from new UIDs, and writes them into the intent files with minimal edits.
 package admission
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -41,7 +42,11 @@ type Assignment struct {
 // It names the resource because a file can hold several.
 func (a Assignment) String() string {
 	d := a.Document
-	return fmt.Sprintf("vm/%s: %s = %v (%s)", d.Metadata.Name, d.FieldPath(a.Path...), a.Value, d.File)
+	prefix := strings.ToLower(d.Kind)
+	if d.Kind == v1alpha1.KindVirtualMachine {
+		prefix = "vm"
+	}
+	return fmt.Sprintf("%s/%s: %s = %v (%s)", prefix, d.Metadata.Name, d.FieldPath(a.Path...), a.Value, d.File)
 }
 
 // Options adjust admission.
@@ -52,33 +57,66 @@ type Options struct {
 
 // Plan allocates the values that the virtual machines in vms lack: a UID,
 // the node in spec.placement.assignedNode, the guest ID in
-// spec.identity.vmid and an address for each network interface with IPv4
-// mode auto. Values that are set never change, so planning an admitted
-// workspace returns nothing. The workspace must be valid.
+// spec.identity.vmid, an address for each network interface with IPv4 mode
+// auto and a MAC address for each interface. Values that are set never
+// change, so planning an admitted workspace returns nothing. The workspace
+// must be valid.
 //
-// The virtual machines are admitted in the order of their files and
-// names, and each one sees the values allocated before it, so no two get
-// the same guest ID or address. Problems are returned as diagnostics; if
+// The virtual machines are admitted in the order of their files and names,
+// and each one sees the values allocated before it, so no two get the same
+// guest ID, address or MAC address. Problems are returned as diagnostics; if
 // there are errors, the assignments are incomplete.
 func Plan(ws *workspace.Workspace, vms []*v1alpha1.VirtualMachine, opts Options) ([]Assignment, diag.List) {
+	return PlanAll(ws, vms, nil, opts)
+}
+
+// PlanTemplates allocates a Proxmox guest ID from the templates environment
+// for each template without one. The workspace must be valid.
+func PlanTemplates(ws *workspace.Workspace, templates []*v1alpha1.Template, opts Options) ([]Assignment, diag.List) {
+	return PlanAll(ws, nil, templates, opts)
+}
+
+// PlanAll allocates missing values for virtual machines and templates with a
+// single allocator. It admits virtual machines first, then templates, so a
+// guest ID allocated to a VM is reserved before templates are considered.
+// Within each kind, resources are admitted in file and name order. Each
+// document is admitted at most once per kind.
+func PlanAll(ws *workspace.Workspace, vms []*v1alpha1.VirtualMachine, templates []*v1alpha1.Template, opts Options) ([]Assignment, diag.List) {
 	a := newAllocator(ws, opts)
-	targets := slices.Clone(vms)
-	sort.SliceStable(targets, func(i, j int) bool {
-		di, dj := targets[i].Document, targets[j].Document
-		if di.File != dj.File {
-			return di.File < dj.File
-		}
-		return di.Metadata.Name < dj.Metadata.Name
+
+	vmTargets := slices.Clone(vms)
+	sort.SliceStable(vmTargets, func(i, j int) bool {
+		return documentLess(vmTargets[i].Document, vmTargets[j].Document)
 	})
-	seen := map[*nrm.Document]bool{}
-	for _, vm := range targets {
-		if !seen[vm.Document] {
-			seen[vm.Document] = true
+	seenVMs := map[*nrm.Document]bool{}
+	for _, vm := range vmTargets {
+		if !seenVMs[vm.Document] {
+			seenVMs[vm.Document] = true
 			a.admit(vm)
 		}
 	}
+
+	templateTargets := slices.Clone(templates)
+	sort.SliceStable(templateTargets, func(i, j int) bool {
+		return documentLess(templateTargets[i].Document, templateTargets[j].Document)
+	})
+	seenTemplates := map[*nrm.Document]bool{}
+	for _, template := range templateTargets {
+		if !seenTemplates[template.Document] {
+			seenTemplates[template.Document] = true
+			a.admitTemplate(template)
+		}
+	}
+
 	a.diags.Sort()
 	return a.out, a.diags
+}
+
+func documentLess(a, b *nrm.Document) bool {
+	if a.File != b.File {
+		return a.File < b.File
+	}
+	return a.Metadata.Name < b.Metadata.Name
 }
 
 // allocator holds the values in use while admission allocates new ones.
@@ -90,6 +128,8 @@ type allocator struct {
 	vms          []*v1alpha1.VirtualMachine
 	// vmids holds the guest IDs in use, by cluster.
 	vmids map[string]map[int]bool
+	// macs holds the uppercase MAC addresses in use, by cluster.
+	macs map[string]map[string]bool
 	// memory holds the memory assigned to guests, by cluster and node.
 	memory map[string]map[string]int64
 	// nodes holds the node each guest is assigned to, by guest name.
@@ -108,6 +148,7 @@ func newAllocator(ws *workspace.Workspace, opts Options) *allocator {
 		clusters:  map[string]*v1alpha1.ProxmoxCluster{},
 		networks:  map[string]*v1alpha1.Network{},
 		vmids:     map[string]map[int]bool{},
+		macs:      map[string]map[string]bool{},
 		memory:    map[string]map[string]int64{},
 		nodes:     map[string]string{},
 		addresses: map[netip.Addr]bool{},
@@ -162,6 +203,9 @@ func newAllocator(ws *workspace.Workspace, opts Options) *allocator {
 				a.assignNode(vm, node)
 			}
 			for _, nic := range s.NICs {
+				if nic.MAC != "" {
+					a.useMAC(s.Placement.Cluster, nic.MAC)
+				}
 				if nic.IPv4 == nil {
 					continue
 				}
@@ -181,6 +225,13 @@ func (a *allocator) useVMID(cluster string, vmid int) {
 	a.vmids[cluster][vmid] = true
 }
 
+func (a *allocator) useMAC(cluster, mac string) {
+	if a.macs[cluster] == nil {
+		a.macs[cluster] = map[string]bool{}
+	}
+	a.macs[cluster][strings.ToUpper(mac)] = true
+}
+
 func (a *allocator) assignNode(vm *v1alpha1.VirtualMachine, node string) {
 	cluster := vm.Spec.Placement.Cluster
 	if a.memory[cluster] == nil {
@@ -191,21 +242,37 @@ func (a *allocator) assignNode(vm *v1alpha1.VirtualMachine, node string) {
 }
 
 func (a *allocator) assign(vm *v1alpha1.VirtualMachine, value any, path ...string) {
-	a.out = append(a.out, Assignment{Document: vm.Document, Path: path, Value: value})
+	a.assignDoc(vm.Document, value, path...)
+}
+
+func (a *allocator) assignDoc(doc *nrm.Document, value any, path ...string) {
+	a.out = append(a.out, Assignment{Document: doc, Path: path, Value: value})
 }
 
 func (a *allocator) errorf(vm *v1alpha1.VirtualMachine, path []string, format string, args ...any) {
-	d := vm.Document
-	a.diags.Errorf(d.File, d.LineOf(path...), d.FieldPath(path...), format, args...)
+	a.errDoc(vm.Document, path, format, args...)
+}
+
+func (a *allocator) errDoc(doc *nrm.Document, path []string, format string, args ...any) {
+	a.diags.Errorf(doc.File, doc.LineOf(path...), doc.FieldPath(path...), format, args...)
 }
 
 func (a *allocator) admit(vm *v1alpha1.VirtualMachine) {
-	if vm.Metadata.UID == "" {
-		a.assign(vm, a.newUID(), "metadata", "uid")
+	uid := vm.Metadata.UID
+	if uid == "" {
+		uid = a.newUID()
+		a.assign(vm, uid, "metadata", "uid")
 	}
 	a.place(vm)
 	a.allocateVMID(vm)
 	a.allocateAddresses(vm)
+	a.allocateMACs(vm, uid)
+}
+
+func (a *allocator) admitTemplate(template *v1alpha1.Template) {
+	if template.Spec.Identity.VMID == 0 {
+		a.allocateGuestID(template.Document, []string{"spec", "identity", "vmid"}, template.Spec.Cluster, "templates")
+	}
 }
 
 // place assigns the node: the pinned node, or for automatic placement the
@@ -302,37 +369,38 @@ func (a *allocator) chooseNode(vm *v1alpha1.VirtualMachine, cluster *v1alpha1.Pr
 // allocateVMID assigns the lowest guest ID in the range of the VM's
 // environment that no VM or template of its cluster uses.
 func (a *allocator) allocateVMID(vm *v1alpha1.VirtualMachine) {
-	s := vm.Spec
-	if s.Identity.VMID != 0 {
+	if vm.Spec.Identity.VMID != 0 {
 		return
 	}
-	path := []string{"spec", "identity", "vmid"}
-	env := vm.Metadata.Labels[nrm.LabelEnvironment]
+	a.allocateGuestID(vm.Document, []string{"spec", "identity", "vmid"}, vm.Spec.Placement.Cluster, vm.Metadata.Labels[nrm.LabelEnvironment])
+}
+
+func (a *allocator) allocateGuestID(doc *nrm.Document, path []string, cluster, env string) {
 	e, defined := a.environments[env]
 	switch {
 	case env == "":
-		a.errorf(vm, path, "cannot allocate a guest ID: the label %s is missing, so the range of IDs is unknown", nrm.LabelEnvironment)
+		a.errDoc(doc, path, "cannot allocate a guest ID: the label %s is missing, so the range of IDs is unknown", nrm.LabelEnvironment)
 		return
 	case !defined:
-		a.errorf(vm, path, "cannot allocate a guest ID: environment %q is not defined in %s", env, workspace.ManifestFile)
+		a.errDoc(doc, path, "cannot allocate a guest ID: environment %q is not defined in %s", env, workspace.ManifestFile)
 		return
 	case len(e.VMIDRange) != 2:
-		a.errorf(vm, path, "cannot allocate a guest ID: environment %q has no vmidRange in %s", env, workspace.ManifestFile)
+		a.errDoc(doc, path, "cannot allocate a guest ID: environment %q has no vmidRange in %s", env, workspace.ManifestFile)
 		return
 	case e.VMIDRange[0] > e.VMIDRange[1]:
-		a.errorf(vm, path, "cannot allocate a guest ID: the vmidRange of environment %q in %s ends before it starts", env, workspace.ManifestFile)
+		a.errDoc(doc, path, "cannot allocate a guest ID: the vmidRange of environment %q in %s ends before it starts", env, workspace.ManifestFile)
 		return
 	}
 	first, last := e.VMIDRange[0], e.VMIDRange[1]
-	used := a.vmids[s.Placement.Cluster]
+	used := a.vmids[cluster]
 	for id := first; id <= last; id++ {
 		if !used[id] {
-			a.assign(vm, id, path...)
-			a.useVMID(s.Placement.Cluster, id)
+			a.assignDoc(doc, id, path...)
+			a.useVMID(cluster, id)
 			return
 		}
 	}
-	a.errorf(vm, path, "cannot allocate a guest ID: cluster %q uses every ID in the range %d-%d of environment %q", s.Placement.Cluster, first, last, env)
+	a.errDoc(doc, path, "cannot allocate a guest ID: cluster %q uses every ID in the range %d-%d of environment %q", cluster, first, last, env)
 }
 
 // allocateAddresses assigns each network interface with IPv4 mode auto and
@@ -363,6 +431,38 @@ func (a *allocator) allocateAddresses(vm *v1alpha1.VirtualMachine) {
 			a.addresses[addr] = true
 		} else {
 			a.errorf(vm, path, "cannot allocate an address: every address in the static range %s of network %q is in use", ip.Static.Range, nic.Network)
+		}
+	}
+}
+
+// allocateMACs assigns each network interface without a MAC address a
+// deterministic address derived from the resource UID and interface index,
+// using the cluster's prefix and avoiding addresses already in use.
+func (a *allocator) allocateMACs(vm *v1alpha1.VirtualMachine, uid string) {
+	for i, nic := range vm.Spec.NICs {
+		if nic.MAC != "" {
+			continue
+		}
+		path := []string{"spec", "nics", strconv.Itoa(i), "mac"}
+		cluster := a.clusters[vm.Spec.Placement.Cluster]
+		if cluster == nil {
+			a.errorf(vm, path, "cannot allocate a MAC address: cluster %q does not exist", vm.Spec.Placement.Cluster)
+			continue
+		}
+		prefix := strings.ToUpper(cluster.Spec.MACPrefix())
+		allocated := false
+		for attempt := range 1 << 16 {
+			h := sha256.Sum256([]byte(fmt.Sprintf("%s/%d/%d", uid, i, attempt)))
+			mac := fmt.Sprintf("%s:%02X:%02X:%02X", prefix, h[0], h[1], h[2])
+			if !a.macs[cluster.Metadata.Name][mac] {
+				a.assign(vm, mac, path...)
+				a.useMAC(cluster.Metadata.Name, mac)
+				allocated = true
+				break
+			}
+		}
+		if !allocated {
+			a.errorf(vm, path, "cannot allocate a MAC address: every candidate for interface %d is in use in cluster %q", i, cluster.Metadata.Name)
 		}
 	}
 }
@@ -417,7 +517,8 @@ func Apply(ws *workspace.Workspace, assignments []Assignment, dryRun bool) error
 		if _, ok := edits[f]; !ok {
 			files = append(files, f)
 		}
-		edits[f] = append(edits[f], yamledit.Edit{Line: as.Document.Line, Path: as.Path, Value: as.Value})
+		order := keyOrderFor(as.Document.Kind)
+		edits[f] = append(edits[f], yamledit.Edit{Line: as.Document.Line, Path: as.Path, Value: as.Value, Order: order})
 	}
 	contents := make([][]byte, len(files))
 	for i, f := range files {
@@ -425,7 +526,7 @@ func Apply(ws *workspace.Workspace, assignments []Assignment, dryRun bool) error
 		if err != nil {
 			return err
 		}
-		if contents[i], err = yamledit.Insert(src, edits[f], keyOrder); err != nil {
+		if contents[i], err = yamledit.Insert(src, edits[f], nil); err != nil {
 			return fmt.Errorf("%s: %w", f, err)
 		}
 	}
@@ -449,12 +550,36 @@ type vmDocument struct {
 	Spec       v1alpha1.VirtualMachineSpec `json:"spec"`
 }
 
+// templateDocument has the layout of a Template document.
+type templateDocument struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Metadata   nrm.Metadata          `json:"metadata"`
+	Spec       v1alpha1.TemplateSpec `json:"spec"`
+}
+
 // keyOrder returns the keys of the mapping at path in a VirtualMachine
-// document in schema order, so that new keys land next to their
-// neighbors. Mappings without a fixed set of keys, such as labels, have no
-// order.
+// document in schema order, so that new keys land next to their neighbors.
 func keyOrder(path []string) []string {
-	t := reflect.TypeOf(vmDocument{})
+	return keyOrderOf(reflect.TypeOf(vmDocument{}), path)
+}
+
+func keyOrderFor(kind string) yamledit.Order {
+	var t reflect.Type
+	switch kind {
+	case v1alpha1.KindVirtualMachine:
+		t = reflect.TypeOf(vmDocument{})
+	case v1alpha1.KindTemplate:
+		t = reflect.TypeOf(templateDocument{})
+	default:
+		return nil
+	}
+	return func(path []string) []string { return keyOrderOf(t, path) }
+}
+
+// keyOrderOf returns the keys of the mapping at path in the document type t
+// in schema order. Mappings without fixed keys have no order.
+func keyOrderOf(t reflect.Type, path []string) []string {
 	for _, seg := range path {
 		switch t = indirect(t); t.Kind() {
 		case reflect.Slice:

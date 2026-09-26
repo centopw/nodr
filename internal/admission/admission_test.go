@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ spec:
   environments:
     prod: { vmidRange: [1000, 1003] }
     lab: { vmidRange: [2000, 2999] }
+    templates: { vmidRange: [9000, 9001] }
     backwards: { vmidRange: [3000, 2999] }
     bare: {}
 `
@@ -77,7 +79,7 @@ spec:
   placement: { cluster: pve-main, assignedNode: pve1 }
   identity: { vmid: 1001 }
   resources: { cpu: { cores: 1 }, memory: { size: 4Gi } }
-  nics: [{ network: dmz, ipv4: { mode: static, address: 10.0.20.2/24 } }]
+  nics: [{ network: dmz, mac: BC:24:11:3A:5E:01, ipv4: { mode: static, address: 10.0.20.2/24 } }]
 `
 
 // vm returns a VirtualMachine document with the given labels and spec
@@ -161,6 +163,20 @@ func vms(t *testing.T, ws *workspace.Workspace, names ...string) []*v1alpha1.Vir
 	return out
 }
 
+// templates returns all templates in the workspace.
+func templates(t *testing.T, ws *workspace.Workspace) []*v1alpha1.Template {
+	t.Helper()
+	var out []*v1alpha1.Template
+	for _, d := range ws.OfKind(v1alpha1.KindTemplate) {
+		template, err := v1alpha1.Decode[v1alpha1.TemplateSpec](d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, template)
+	}
+	return out
+}
+
 // plan admits the VMs with the given names, or all of them, and returns
 // the assignments as text.
 func plan(t *testing.T, ws *workspace.Workspace, names ...string) ([]string, diag.List) {
@@ -207,6 +223,8 @@ func TestPlan(t *testing.T) {
 		"vm/web-02: spec.placement.assignedNode = pve2 (intent/compute/web-02.yaml)",
 		"vm/web-02: spec.identity.vmid = 1002 (intent/compute/web-02.yaml)",
 		"vm/web-02: spec.nics[0].ipv4.address = 10.0.20.3/24 (intent/compute/web-02.yaml)",
+		"vm/web-02: spec.nics[0].mac = BC:24:11:AE:D9:D5 (intent/compute/web-02.yaml)",
+		"vm/web-02: spec.nics[1].mac = BC:24:11:7D:55:1F (intent/compute/web-02.yaml)",
 	})
 }
 
@@ -230,10 +248,12 @@ func TestPlanSeveralVMs(t *testing.T) {
 		"vm/web-03: spec.placement.assignedNode = pve2 (intent/compute/a.yaml)",
 		"vm/web-03: spec.identity.vmid = 1002 (intent/compute/a.yaml)",
 		"vm/web-03: spec.nics[0].ipv4.address = 10.0.20.3/24 (intent/compute/a.yaml)",
+		"vm/web-03: spec.nics[0].mac = BC:24:11:AE:D9:D5 (intent/compute/a.yaml)",
 		"vm/web-04: metadata.uid = 01J9Z3K4T7M2Q8V5X6N0B1C202 (intent/compute/a.yaml)",
 		"vm/web-04: spec.placement.assignedNode = pve3 (intent/compute/a.yaml)",
 		"vm/web-04: spec.identity.vmid = 1003 (intent/compute/a.yaml)",
 		"vm/web-04: spec.nics[0].ipv4.address = 10.0.20.4/24 (intent/compute/a.yaml)",
+		"vm/web-04: spec.nics[0].mac = BC:24:11:1C:BE:F8 (intent/compute/a.yaml)",
 		"vm/lab-01: metadata.uid = 01J9Z3K4T7M2Q8V5X6N0B1C203 (intent/compute/b.yaml)",
 		"vm/lab-01: spec.placement.assignedNode = pve3 (intent/compute/b.yaml)",
 		"vm/lab-01: spec.identity.vmid = 2000 (intent/compute/b.yaml)",
@@ -242,7 +262,89 @@ func TestPlanSeveralVMs(t *testing.T) {
 	// Admitting only some VMs gives them the same values, whatever order
 	// they are named in.
 	selected, _ := plan(t, ws, "web-04", "web-03")
-	check(t, selected, got[:8])
+	check(t, selected, got[:10])
+}
+
+func TestPlanAllReservesGuestIDsAcrossKinds(t *testing.T) {
+	overlapping := strings.Replace(manifest, "    templates: { vmidRange: [9000, 9001] }", "    templates: { vmidRange: [1000, 1003] }", 1)
+	const template = `apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: alpine }
+spec:
+  cluster: pve-main
+  image: { url: https://example.com/alpine.qcow2, checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  storage: local-lvm
+`
+	ws := load(t, map[string]string{
+		workspace.ManifestFile:              overlapping,
+		"intent/compute/new.yaml":           vm("new", "{ nodr/environment: prod }", "placement: { cluster: pve-main }", resources("1Gi")),
+		"intent/platform/new-template.yaml": template,
+	})
+
+	assignments, diags := PlanAll(ws, vms(t, ws, "new"), templates(t, ws), Options{NewUID: uids()})
+	checkDiags(t, diags)
+	var guestIDs []string
+	for _, assignment := range assignments {
+		if slices.Equal(assignment.Path, []string{"spec", "identity", "vmid"}) {
+			guestIDs = append(guestIDs, assignment.String())
+		}
+	}
+	check(t, guestIDs, []string{
+		"vm/new: spec.identity.vmid = 1002 (intent/compute/new.yaml)",
+		"template/alpine: spec.identity.vmid = 1003 (intent/platform/new-template.yaml)",
+	})
+}
+
+func TestPlanAllAdmitsDuplicateTargetsOnce(t *testing.T) {
+	overlapping := strings.Replace(manifest, "    templates: { vmidRange: [9000, 9001] }", "    templates: { vmidRange: [1000, 1003] }", 1)
+	const template = `apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: alpine }
+spec:
+  cluster: pve-main
+  image: { url: https://example.com/alpine.qcow2, checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  storage: local-lvm
+`
+	const vmUID = "01J9Z3K4T7M2Q8V5X6N0B1C201"
+	vmSource := strings.Replace(vm("new", "{ nodr/environment: prod }",
+		"placement: { cluster: pve-main, assignedNode: pve1 }", resources("1Gi")),
+		"  labels:", "  uid: "+vmUID+"\n  labels:", 1)
+
+	for _, tc := range []struct {
+		name             string
+		distinctWrappers bool
+	}{
+		{name: "duplicate pointers"},
+		{name: "duplicate targets", distinctWrappers: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := load(t, map[string]string{
+				workspace.ManifestFile:              overlapping,
+				"intent/compute/new.yaml":           vmSource,
+				"intent/platform/new-template.yaml": template,
+			})
+			vmTargets := vms(t, ws, "new")
+			templateTargets := templates(t, ws)
+			if tc.distinctWrappers {
+				vmTargets = append(vmTargets, vms(t, ws, "new")[0])
+				templateTargets = append(templateTargets, templates(t, ws)[0])
+			} else {
+				vmTargets = append(vmTargets, vmTargets[0])
+				templateTargets = append(templateTargets, templateTargets[0])
+			}
+
+			assignments, diags := PlanAll(ws, vmTargets, templateTargets, Options{})
+			checkDiags(t, diags)
+			got := make([]string, len(assignments))
+			for i, assignment := range assignments {
+				got[i] = assignment.String()
+			}
+			check(t, got, []string{
+				"vm/new: spec.identity.vmid = 1002 (intent/compute/new.yaml)",
+				"template/alpine: spec.identity.vmid = 1003 (intent/platform/new-template.yaml)",
+			})
+		})
+	}
 }
 
 func TestPlanKeepsSetValues(t *testing.T) {
@@ -250,6 +352,216 @@ func TestPlanKeepsSetValues(t *testing.T) {
 	got, diags := plan(t, ws)
 	checkDiags(t, diags)
 	check(t, got, []string{})
+}
+
+func TestPlanMACs(t *testing.T) {
+	validMAC := regexp.MustCompile(`^BC:24:11:[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}$`)
+	vmWithUID := func(name, uid string) string {
+		vmid := "1002"
+		if name == "mac-02" {
+			vmid = "1003"
+		}
+		return strings.Replace(vm(name, "{ nodr/environment: prod }",
+			"placement: { cluster: pve-main, assignedNode: pve1 }", "identity: { vmid: "+vmid+" }",
+			resources("1Gi"), "nics: [{ network: dmz }]"), "  labels:", "  uid: "+uid+"\n  labels:", 1)
+	}
+	ws := load(t, map[string]string{"intent/compute/mac.yaml": vmWithUID("mac-01", "01J9Z3K4T7M2Q8V5X6N0B1C201")})
+	first, diags := Plan(ws, vms(t, ws, "mac-01"), Options{})
+	checkDiags(t, diags)
+	second, diags := Plan(ws, vms(t, ws, "mac-01"), Options{})
+	checkDiags(t, diags)
+	if len(first) != 1 || len(second) != 1 || first[0].Value != second[0].Value {
+		t.Fatalf("MAC assignments = %v then %v, want one deterministic assignment", first, second)
+	}
+	if mac, ok := first[0].Value.(string); !ok || !validMAC.MatchString(mac) {
+		t.Errorf("MAC = %v, want default-prefix uppercase address", first[0].Value)
+	}
+
+	ws = load(t, map[string]string{
+		"intent/compute/mac.yaml": vmWithUID("mac-01", "01J9Z3K4T7M2Q8V5X6N0B1C201") + "---\n" +
+			vmWithUID("mac-02", "01J9Z3K4T7M2Q8V5X6N0B1C202"),
+	})
+	assignments, diags := Plan(ws, vms(t, ws, "mac-01", "mac-02"), Options{})
+	checkDiags(t, diags)
+	if len(assignments) != 2 || assignments[0].Value == assignments[1].Value {
+		t.Errorf("MAC assignments = %v, want two distinct addresses", assignments)
+	}
+
+	customPlatform := strings.Replace(platform, "  nodes: [pve3, pve1, pve2]\n", "  nodes: [pve3, pve1, pve2]\n  macPrefix: AA:BB:CC\n", 1)
+	ws = load(t, map[string]string{
+		"intent/platform/pve.yaml": customPlatform,
+		"intent/compute/mac.yaml":  vmWithUID("mac-01", "01J9Z3K4T7M2Q8V5X6N0B1C201"),
+	})
+	assignments, diags = Plan(ws, vms(t, ws, "mac-01"), Options{})
+	checkDiags(t, diags)
+	if len(assignments) != 1 || !strings.HasPrefix(assignments[0].Value.(string), "AA:BB:CC:") {
+		t.Errorf("MAC assignments = %v, want custom prefix", assignments)
+	}
+}
+
+func TestPlanMACRetriesCollisionsDeterministically(t *testing.T) {
+	const (
+		uid         = "01J9Z3K4T7M2Q8V5X6N0B1C201"
+		attempt0MAC = "BC:24:11:AE:D9:D5"
+		attempt1MAC = "BC:24:11:25:93:FF"
+	)
+	withUID := func(src, resourceUID string) string {
+		return strings.Replace(src, "  labels:", "  uid: "+resourceUID+"\n  labels:", 1)
+	}
+	target := withUID(vm("mac-target", "{ nodr/environment: prod }",
+		"placement: { cluster: pve-main, assignedNode: pve1 }", "identity: { vmid: 1002 }",
+		resources("1Gi"), "nics: [{ network: dmz }]"), uid)
+	occupied := withUID(vm("mac-occupied", "{ nodr/environment: prod }",
+		"placement: { cluster: pve-main, assignedNode: pve1 }", "identity: { vmid: 1003 }",
+		resources("1Gi"), "nics: [{ network: dmz, mac: "+attempt0MAC+" }]"), "01J9Z3K4T7M2Q8V5X6N0B1C299")
+
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{name: "attempt zero", src: target, want: attempt0MAC},
+		{name: "collision first load", src: occupied + "---\n" + target, want: attempt1MAC},
+		{name: "collision independent load", src: occupied + "---\n" + target, want: attempt1MAC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := load(t, map[string]string{"intent/compute/mac.yaml": tc.src})
+			assignments, diags := Plan(ws, vms(t, ws, "mac-target"), Options{})
+			checkDiags(t, diags)
+			if len(assignments) != 1 || assignments[0].Value != tc.want {
+				t.Errorf("MAC assignments = %v, want %s", assignments, tc.want)
+			}
+		})
+	}
+}
+
+func TestPlanMACReportsMissingCluster(t *testing.T) {
+	const file = "intent/compute/mac.yaml"
+	const uid = "01J9Z3K4T7M2Q8V5X6N0B1C201"
+	src := strings.Replace(vm("mac-01", "{ nodr/environment: prod }",
+		"placement: { cluster: pve-main, assignedNode: pve1 }", "identity: { vmid: 1002 }",
+		resources("1Gi"), "nics: [{ network: dmz }]"), "  labels:", "  uid: "+uid+"\n  labels:", 1)
+	for _, tc := range []struct {
+		name    string
+		cluster string
+	}{
+		{name: "unknown", cluster: "missing"},
+		{name: "empty", cluster: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := load(t, map[string]string{file: src})
+			target := vms(t, ws, "mac-01")[0]
+			target.Spec.Placement.Cluster = tc.cluster
+			assignments, diags := Plan(ws, []*v1alpha1.VirtualMachine{target}, Options{})
+			if len(assignments) != 0 {
+				t.Errorf("assignments = %v, want none", assignments)
+			}
+			checkDiags(t, diags, fmt.Sprintf(`intent/compute/mac.yaml:11: error: spec.nics[0].mac: cannot allocate a MAC address: cluster %q does not exist`, tc.cluster))
+			data, err := os.ReadFile(filepath.Join(ws.Root, filepath.FromSlash(file)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != src {
+				t.Errorf("file changed:\n%s", data)
+			}
+		})
+	}
+}
+
+func TestPlanTemplateGuestIDs(t *testing.T) {
+	templateDoc := func(name, cluster string) string {
+		return fmt.Sprintf(`apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: %s }
+spec:
+  cluster: %s
+  image: { url: https://example.com/%s.qcow2, checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  storage: local-lvm
+`, name, cluster, name)
+	}
+	ws := load(t, map[string]string{"intent/platform/templates.yaml": templateDoc("alpine", "pve-main")})
+	assignments, diags := PlanTemplates(ws, templates(t, ws), Options{})
+	checkDiags(t, diags)
+	if len(assignments) != 1 || assignments[0].Value != 9000 || assignments[0].String() != "template/alpine: spec.identity.vmid = 9000 (intent/platform/templates.yaml)" {
+		t.Errorf("assignments = %v, want template guest ID 9000", assignments)
+	}
+
+	ws = load(t, map[string]string{"intent/platform/templates.yaml": templateDoc("alpine", "pve-main") + "---\n" + templateDoc("ubuntu", "pve-main")})
+	assignments, diags = PlanTemplates(ws, templates(t, ws), Options{})
+	checkDiags(t, diags)
+	if len(assignments) != 2 || assignments[0].Value != 9000 || assignments[1].Value != 9001 {
+		t.Errorf("assignments = %v, want distinct lowest IDs", assignments)
+	}
+
+	missing := strings.Replace(manifest, "    templates: { vmidRange: [9000, 9001] }\n", "", 1)
+	ws = load(t, map[string]string{workspace.ManifestFile: missing, "intent/platform/templates.yaml": templateDoc("alpine", "pve-main")})
+	assignments, diags = PlanTemplates(ws, templates(t, ws), Options{})
+	if len(assignments) != 0 {
+		t.Errorf("assignments = %v, want none", assignments)
+	}
+	checkDiags(t, diags, `intent/platform/templates.yaml:4: error: spec.identity.vmid: cannot allocate a guest ID: environment "templates" is not defined in nodr.yaml`)
+
+	for _, tc := range []struct {
+		name       string
+		rangeValue string
+		diag       string
+	}{
+		{
+			name:       "environment without a range",
+			rangeValue: "{}",
+			diag:       `intent/platform/templates.yaml:4: error: spec.identity.vmid: cannot allocate a guest ID: environment "templates" has no vmidRange in nodr.yaml`,
+		},
+		{
+			name:       "range ends before it starts",
+			rangeValue: "{ vmidRange: [3000, 2999] }",
+			diag:       `intent/platform/templates.yaml:4: error: spec.identity.vmid: cannot allocate a guest ID: the vmidRange of environment "templates" in nodr.yaml ends before it starts`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configured := strings.Replace(manifest, "{ vmidRange: [9000, 9001] }", tc.rangeValue, 1)
+			ws := load(t, map[string]string{workspace.ManifestFile: configured, "intent/platform/templates.yaml": templateDoc("alpine", "pve-main")})
+			assignments, diags := PlanTemplates(ws, templates(t, ws), Options{})
+			if len(assignments) != 0 {
+				t.Errorf("assignments = %v, want none", assignments)
+			}
+			checkDiags(t, diags, tc.diag)
+		})
+	}
+}
+
+func TestApplyTemplateGuestID(t *testing.T) {
+	const file = "intent/platform/alpine.yaml"
+	const src = `# Keep this comment.
+apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: alpine }
+spec:
+  cluster: pve-main
+  image: { url: https://example.com/alpine.qcow2, checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  os: { family: alpine } # keep inline
+  storage: local-lvm
+`
+	ws := load(t, map[string]string{file: src})
+	assignments, diags := PlanTemplates(ws, templates(t, ws), Options{})
+	checkDiags(t, diags)
+	if err := Apply(ws, assignments, false); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(src, "  storage: local-lvm\n", "  storage: local-lvm\n  identity:\n    vmid: 9000\n", 1)
+	data, err := os.ReadFile(filepath.Join(ws.Root, filepath.FromSlash(file)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != want {
+		t.Errorf("template =\n%s\nwant\n%s", data, want)
+	}
+	got := reload(t, ws.Root)
+	decoded := templates(t, got)
+	for _, template := range decoded {
+		if template.Metadata.Name == "alpine" && template.Spec.Identity.VMID != 9000 {
+			t.Errorf("decoded VMID = %d, want 9000", template.Spec.Identity.VMID)
+		}
+	}
 }
 
 func TestPlanGuestIDs(t *testing.T) {
@@ -546,6 +858,49 @@ spec:
 	}
 }
 
+func TestApplyMixedDocumentKinds(t *testing.T) {
+	const file = "intent/mixed.yaml"
+	const src = `apiVersion: nodr/v1alpha1
+kind: VirtualMachine
+metadata: { name: mixed-vm, uid: 01J9Z3K4T7M2Q8V5X6N0B1C201, labels: { nodr/environment: prod } }
+spec:
+  placement: { cluster: pve-main, assignedNode: pve1 }
+  identity: { vmid: 1002 }
+  resources: { cpu: { cores: 1 }, memory: { size: 1Gi } }
+  nics: [{ network: dmz, ipv4: { mode: dhcp } }]
+---
+apiVersion: nodr/v1alpha1
+kind: Template
+metadata: { name: mixed-template }
+spec:
+  cluster: pve-main
+  image: { url: https://example.com/mixed.qcow2, checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+  storage: local-lvm
+`
+	ws := load(t, map[string]string{file: src})
+	vmAssignments, vmDiags := Plan(ws, vms(t, ws, "mixed-vm"), Options{})
+	templateAssignments, templateDiags := PlanTemplates(ws, templates(t, ws), Options{})
+	checkDiags(t, vmDiags)
+	checkDiags(t, templateDiags)
+	assignments := make([]Assignment, 0, len(vmAssignments)+len(templateAssignments))
+	assignments = append(assignments, vmAssignments...)
+	assignments = append(assignments, templateAssignments...)
+	if err := Apply(ws, assignments, false); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.NewReplacer(
+		"nics: [{ network: dmz, ipv4:", "nics: [{ network: dmz, mac: BC:24:11:AE:D9:D5, ipv4:",
+		"  storage: local-lvm\n", "  storage: local-lvm\n  identity:\n    vmid: 9000\n",
+	).Replace(src)
+	data, err := os.ReadFile(filepath.Join(ws.Root, filepath.FromSlash(file)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != want {
+		t.Errorf("mixed file =\n%s\nwant\n%s", data, want)
+	}
+}
+
 func TestApply(t *testing.T) {
 	const web02 = `# A second web server.
 apiVersion: nodr/v1alpha1
@@ -605,6 +960,7 @@ spec:
     memory: { size: 2Gi }
   nics:
     - network: dmz
+      mac: BC:24:11:AE:D9:D5
       ipv4: { mode: auto, address: 10.0.20.3/24 }
 `,
 		"intent/compute/db.yaml": strings.NewReplacer(

@@ -508,6 +508,55 @@ func TestWithDefaults(t *testing.T) {
 	}
 }
 
+func TestProxmoxClusterSpecMACPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		spec ProxmoxClusterSpec
+		want string
+	}{
+		{name: "default", want: "BC:24:11"},
+		{name: "explicit", spec: ProxmoxClusterSpec{MacPrefix: "AA:BB:CC"}, want: "AA:BB:CC"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.spec.MACPrefix(); got != tt.want {
+				t.Errorf("MACPrefix() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProxmoxClusterSchemaRejectsMalformedMACPrefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "wrong octet count", value: "AA:BB"},
+		{name: "one-digit octet", value: "A:BB:CC"},
+		{name: "wrong separator", value: "AA-BB-CC"},
+		{name: "non-hex", value: "GG:BB:CC"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := fmt.Sprintf(`apiVersion: nodr/v1alpha1
+kind: ProxmoxCluster
+metadata:
+  name: bad-prefix
+spec:
+  endpoints: [https://10.0.10.11:8006]
+  credentialsRef: proxmox/bad-prefix-token
+  macPrefix: %q
+`, tt.value)
+			docs, diags := nrm.Parse("bad.yaml", []byte(src))
+			if diags.HasErrors() || len(docs) != 1 {
+				t.Fatalf("parse: %v (%d documents)", diags.Err(), len(docs))
+			}
+			want := fmt.Sprintf("bad.yaml:8: error: spec.macPrefix: '%s' does not match pattern '^([0-9A-Fa-f]{2}:){2}[0-9A-Fa-f]{2}$'", tt.value)
+			assertDiags(t, registry(t).Validate(docs), []string{want})
+		})
+	}
+}
+
 func assertDiags(t *testing.T, got diag.List, want []string) {
 	t.Helper()
 	lines := make([]string, len(got))

@@ -139,6 +139,7 @@ type ProxmoxClusterSpec struct {
 	TLS            *ProxmoxTLS     `json:"tls,omitempty"`
 	Nodes          []string        `json:"nodes,omitempty"`
 	Network        *ProxmoxNetwork `json:"network,omitempty"`
+	MacPrefix      string          `json:"macPrefix,omitempty"`
 }
 
 // ProxmoxTLS holds the TLS settings of a cluster.
@@ -155,12 +156,24 @@ type ProxmoxNetwork struct {
 // unless the cluster names another one.
 const DefaultGuestBridge = "vmbr0"
 
+// DefaultMACPrefix is the three-octet prefix nodr uses for allocated MAC
+// addresses unless the cluster names another one.
+const DefaultMACPrefix = "BC:24:11"
+
 // GuestBridge returns the bridge that guest network interfaces attach to.
 func (s *ProxmoxClusterSpec) GuestBridge() string {
 	if s.Network != nil && s.Network.GuestBridge != "" {
 		return s.Network.GuestBridge
 	}
 	return DefaultGuestBridge
+}
+
+// MACPrefix returns the prefix nodr uses for allocated MAC addresses.
+func (s *ProxmoxClusterSpec) MACPrefix() string {
+	if s.MacPrefix != "" {
+		return s.MacPrefix
+	}
+	return DefaultMACPrefix
 }
 
 // NetworkSpec is the spec of a Network.

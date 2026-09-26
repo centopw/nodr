@@ -74,17 +74,17 @@ func (a *app) admitCommand() *cobra.Command {
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "admit [vm/<name>...]",
-		Short: "Fill in the values nodr allocates for virtual machines",
+		Short: "Fill in the values nodr allocates for virtual machines and templates",
 		Long: `Admit fills in the fields that nodr allocates for the given virtual
-machines, or for all of them, when they are empty: the UID, the node, the
-guest ID from the range of the VM's environment in nodr.yaml, and IPv4
-addresses for network interfaces with mode auto. It prints one line per
-value and, unless --dry-run is given, writes the values into the intent
-files. Values that are set never change, and only the new fields are
-written, so comments and formatting stay as they are. If a value cannot
-be allocated or written, admit changes no file and exits with status 1.
-This is the local counterpart of the admission that nodr runs on every
-change.`,
+machines, or for all virtual machines and templates when no names are given.
+For VMs these are the UID, node, guest ID from the VM environment, IPv4
+addresses for interfaces with mode auto, and MAC addresses. For templates it
+fills the guest ID from the templates environment in nodr.yaml. It prints one
+line per value and, unless --dry-run is given, writes the values into the
+intent files. Values that are set never change, and only the new fields are
+written, so comments and formatting stay as they are. If a value cannot be
+allocated or written, admit changes no file and exits with status 1. This is
+the local counterpart of the admission that nodr runs on every change.`,
 		Example: "  nodr admit vm/web-02 --dry-run",
 		RunE: func(_ *cobra.Command, args []string) error {
 			l, err := a.mustLoad()
@@ -95,7 +95,14 @@ change.`,
 			if err != nil {
 				return err
 			}
-			assignments, diags := admission.Plan(l.ws, vms, admission.Options{})
+			var templates []*v1alpha1.Template
+			if len(args) == 0 {
+				templates, err = l.templates()
+				if err != nil {
+					return err
+				}
+			}
+			assignments, diags := admission.PlanAll(l.ws, vms, templates, admission.Options{})
 			a.printDiagnostics(diags)
 			if diags.HasErrors() {
 				fmt.Fprintf(a.stderr, "nodr: admission failed; no file was changed\n")
@@ -320,6 +327,21 @@ func (l *loaded) virtualMachines(args []string) ([]*v1alpha1.VirtualMachine, err
 		vms[i] = vm
 	}
 	return vms, nil
+}
+
+// templates returns all templates in name order.
+func (l *loaded) templates() ([]*v1alpha1.Template, error) {
+	docs := l.ws.OfKind(v1alpha1.KindTemplate)
+	sort.Slice(docs, func(i, j int) bool { return docs[i].Metadata.Name < docs[j].Metadata.Name })
+	templates := make([]*v1alpha1.Template, len(docs))
+	for i, d := range docs {
+		template, err := v1alpha1.Decode[v1alpha1.TemplateSpec](d)
+		if err != nil {
+			return nil, err
+		}
+		templates[i] = template
+	}
+	return templates, nil
 }
 
 func noArgs(_ *cobra.Command, args []string) error {
