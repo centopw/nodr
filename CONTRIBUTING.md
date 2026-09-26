@@ -8,9 +8,12 @@
 - [OpenTofu](https://opentofu.org/) 1.8 or later, optionally, to run
   `nodr plan` and `nodr apply`, the OpenTofu integration tests, and to
   validate the engine code of the examples.
+- Node.js 20 or later, optionally, to rebuild the web UI with `make web-ui`.
+  `internal/webui/dist` already holds a built copy, so `nodr` builds
+  without Node.js; rebuild it only after changing `web/`.
 
-`make help` lists the development tasks: `build`, `snapshot`, `test`,
-`test-race`, `cover`, `vet`, `lint`, `fmt`, `tidy` and `clean`.
+`make help` lists the development tasks: `build`, `web-ui`, `snapshot`,
+`test`, `test-race`, `cover`, `vet`, `lint`, `fmt`, `tidy` and `clean`.
 
 ## Layout
 
@@ -21,6 +24,8 @@
 | `internal/nrm` | Intent documents: parsing, metadata, schema and reference validation |
 | `internal/nrm/v1alpha1` | The `nodr/v1alpha1` kinds: schemas, Go types and semantic checks |
 | `internal/workspace` | Loading a workspace from disk |
+| `internal/api` | The versioned HTTP API that the web UI and `nodr server` expose |
+| `internal/webui` | Embeds and serves the web UI's built output from `internal/webui/dist` |
 | `internal/admission` | Allocating UIDs, nodes, VM IDs and addresses, and writing them into intent |
 | `internal/yamledit` | Minimal edits of YAML files that keep comments and formatting |
 | `internal/resolve` | Resolving references between resources, in both directions |
@@ -32,6 +37,7 @@
 | `internal/quantity`, `internal/diag`, `internal/buildinfo` | Byte quantities, diagnostics, version information |
 | `docs/` | Technical design and architecture decisions |
 | `examples/` | Example workspaces |
+| `web/` | The React and Vite web UI; `make web-ui` builds it into `internal/webui/dist` |
 | `scripts/` | Release scripts and their tests |
 
 ## Tests
