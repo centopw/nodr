@@ -27,7 +27,7 @@ if [ "$FAKE_TOFU_FAIL" = "$unit $1" ]; then
 fi
 case $1 in
 init)
-	echo "initialized $unit"
+	echo "initialized $unit with the token $PROXMOX_VE_API_TOKEN"
 	;;
 plan)
 	for arg in "$@"; do

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -14,6 +16,8 @@ import (
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
+	"github.com/centopw/nodr/internal/planapply"
+	"github.com/centopw/nodr/internal/secrets"
 	"github.com/centopw/nodr/internal/workspace"
 )
 
@@ -81,6 +85,9 @@ type app struct {
 	// the context.
 	interrupts   <-chan struct{}
 	workspaceDir string
+
+	secretsMu    sync.Mutex
+	secretsStore *secrets.Store
 }
 
 func (a *app) rootCommand() *cobra.Command {
@@ -104,8 +111,27 @@ disk.`,
 		a.planCommand(),
 		a.applyCommand(),
 		a.serverCommand(),
+		a.authCommand(),
+		a.clusterCommand(),
 	)
 	return root
+}
+
+func (a *app) secretsResolve(root string) (planapply.Resolver, error) {
+	a.secretsMu.Lock()
+	defer a.secretsMu.Unlock()
+	if a.secretsStore == nil {
+		kek, err := secrets.LoadKEK(secrets.KEKConfig{EnvVar: "NODR_KEK"})
+		if err != nil {
+			return nil, err
+		}
+		store, err := secrets.Open(filepath.Join(root, ".nodr", "secrets.db"), kek)
+		if err != nil {
+			return nil, err
+		}
+		a.secretsStore = store
+	}
+	return a.secretsStore.Resolve, nil
 }
 
 // loaded is a workspace together with the kinds it is validated against.

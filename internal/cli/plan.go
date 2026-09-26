@@ -107,7 +107,11 @@ func (a *app) planUnits(ctx context.Context, only []string, planDir string) ([]p
 	if err != nil {
 		return nil, err
 	}
-	written, plans, err := planapply.PlanUnits(ctx, l.ws, only, planDir, a.stderr, a.interrupts, nil)
+	resolve, err := a.secretsResolve(l.ws.Root)
+	if err != nil {
+		return nil, err
+	}
+	written, plans, err := planapply.PlanUnits(ctx, l.ws, only, planDir, a.stderr, a.interrupts, resolve)
 	for _, p := range slices.Sorted(maps.Keys(written)) {
 		fmt.Fprintf(a.stdout, "wrote %s\n", p)
 	}
