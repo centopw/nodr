@@ -25,6 +25,7 @@ import (
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
 	"github.com/centopw/nodr/internal/planapply"
 	"github.com/centopw/nodr/internal/workspace"
+	"github.com/centopw/nodr/internal/yamledit"
 )
 
 const apiPrefix = "/api/v1"
@@ -43,10 +44,13 @@ func Handler(ctx context.Context, root string) http.Handler {
 	mux.HandleFunc("GET "+apiPrefix+"/workspaces/{workspace}", a.getWorkspace)
 	mux.HandleFunc("GET "+apiPrefix+"/workspaces/{workspace}/resources", a.listResources)
 	mux.HandleFunc("POST "+apiPrefix+"/workspaces/{workspace}/commands", a.runCommand)
+	mux.HandleFunc("POST "+apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", a.resourceAction)
+	mux.HandleFunc("DELETE "+apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", a.deleteResource)
 	mux.HandleFunc(apiPrefix+"/workspaces", methodNotAllowed)
 	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}", methodNotAllowed)
 	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/resources", methodNotAllowed)
 	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/commands", methodNotAllowed)
+	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", methodNotAllowed)
 	mux.HandleFunc("/api/", notFound)
 	return mux
 }
@@ -210,6 +214,7 @@ type virtualMachineItem struct {
 	Memory      string   `json:"memory"`
 	Environment string   `json:"environment"`
 	Addresses   []string `json:"addresses"`
+	PowerState  string   `json:"powerState"`
 }
 
 func (a *server) listResources(w http.ResponseWriter, r *http.Request) {
@@ -248,11 +253,16 @@ func (a *server) listResources(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		addresses, _ := networkValues(vm.Spec.NICs)
+		powerState := vm.Spec.Lifecycle.PowerState
+		if powerState == "" {
+			powerState = v1alpha1.PowerStateRunning
+		}
 		items = append(items, virtualMachineItem{
 			Kind: kind, Name: vm.Metadata.Name, Cluster: vm.Spec.Placement.Cluster,
 			Node: vm.Spec.Placement.AssignedNode, VMID: vm.Spec.Identity.VMID,
 			CPU: vm.Spec.Resources.CPU.Cores, Memory: vm.Spec.Resources.Memory.Size.String(),
 			Environment: vm.Metadata.Labels[nrm.LabelEnvironment], Addresses: addresses,
+			PowerState: powerState,
 		})
 	}
 	writeJSON(w, http.StatusOK, struct {
@@ -352,6 +362,18 @@ func (a *server) runCommand(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		a.createVM(w, params)
+	case "vm.start":
+		if name, ok := decodeActionParams(w, request); ok {
+			a.setVMPowerState(w, name, v1alpha1.PowerStateRunning)
+		}
+	case "vm.stop":
+		if name, ok := decodeActionParams(w, request); ok {
+			a.setVMPowerState(w, name, v1alpha1.PowerStateStopped)
+		}
+	case "vm.delete":
+		if name, ok := decodeActionParams(w, request); ok {
+			a.deleteVM(w, name)
+		}
 	case "workspace.plan":
 		a.planWorkspace(w, r)
 	case "workspace.apply":
@@ -466,6 +488,186 @@ func (a *server) createVM(w http.ResponseWriter, params vmCreateParams) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, createResponse(finalVM))
+}
+
+type vmActionParams struct {
+	Name string `json:"name"`
+}
+
+type vmPowerStateResponse struct {
+	Name       string `json:"name"`
+	PowerState string `json:"powerState"`
+}
+
+type vmDeleteResponse struct {
+	Name    string `json:"name"`
+	Deleted bool   `json:"deleted"`
+}
+
+func decodeActionParams(w http.ResponseWriter, req commandRequest) (string, bool) {
+	var params vmActionParams
+	if len(req.Params) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(req.Params))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&params); err != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid request", fmt.Sprintf("decode params: %v", err), nil)
+			return "", false
+		}
+	}
+	if params.Name == "" && req.Target != "" {
+		params.Name = req.Target
+	}
+	if params.Name == "" {
+		message := "name is required"
+		writeProblem(w, http.StatusBadRequest, "Invalid request", message, []fieldError{{Path: "name", Message: message}})
+		return "", false
+	}
+	return params.Name, true
+}
+
+func (a *server) resourceAction(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.workspace(w, r); !ok {
+		return
+	}
+	kind := r.PathValue("kind")
+	rawName := r.PathValue("name")
+
+	name, op, hasOp := strings.Cut(rawName, ":")
+	if !hasOp || op == "" {
+		writeProblem(w, http.StatusBadRequest, "Invalid operation", "missing operation suffix (e.g. :start, :stop, :delete)", nil)
+		return
+	}
+	if kind != v1alpha1.KindVirtualMachine {
+		message := fmt.Sprintf("resource kind %q does not support lifecycle actions", kind)
+		writeProblem(w, http.StatusBadRequest, "Invalid resource kind", message, nil)
+		return
+	}
+	switch op {
+	case "start":
+		a.setVMPowerState(w, name, v1alpha1.PowerStateRunning)
+	case "stop":
+		a.setVMPowerState(w, name, v1alpha1.PowerStateStopped)
+	case "delete":
+		a.deleteVM(w, name)
+	default:
+		message := fmt.Sprintf("operation %q is not supported; must be :start, :stop, or :delete", op)
+		writeProblem(w, http.StatusBadRequest, "Unknown operation", message, nil)
+	}
+}
+
+func (a *server) deleteResource(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.workspace(w, r); !ok {
+		return
+	}
+	kind := r.PathValue("kind")
+	rawName := r.PathValue("name")
+	name, _, _ := strings.Cut(rawName, ":")
+
+	if kind != v1alpha1.KindVirtualMachine {
+		message := fmt.Sprintf("resource kind %q does not support deletion via this endpoint", kind)
+		writeProblem(w, http.StatusBadRequest, "Invalid resource kind", message, nil)
+		return
+	}
+	a.deleteVM(w, name)
+}
+
+func (a *server) setVMPowerState(w http.ResponseWriter, name string, powerState string) {
+	a.createMu.Lock()
+	defer a.createMu.Unlock()
+
+	ws, ok := a.load(w)
+	if !ok {
+		return
+	}
+	document := ws.Find(nrm.Ref{Kind: v1alpha1.KindVirtualMachine, Name: name})
+	if document == nil {
+		message := fmt.Sprintf("VirtualMachine %q not found", name)
+		writeProblem(w, http.StatusNotFound, "Resource not found", message, nil)
+		return
+	}
+	filePath := filepath.Join(ws.Root, filepath.FromSlash(document.File))
+	src, err := os.ReadFile(filePath)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "VM update failed", err.Error(), nil)
+		return
+	}
+	line := document.Line
+	if line <= 0 {
+		line = 1
+	}
+	edits := []yamledit.Edit{
+		{
+			Line:  line,
+			Path:  []string{"spec", "lifecycle", "powerState"},
+			Value: powerState,
+			Order: vmKeyOrder,
+		},
+	}
+	updated, err := yamledit.Set(src, edits, vmKeyOrder)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "VM update failed", err.Error(), nil)
+		return
+	}
+	if err := os.WriteFile(filePath, updated, 0o644); err != nil {
+		writeProblem(w, http.StatusInternalServerError, "VM update failed", err.Error(), nil)
+		return
+	}
+	if _, ok := a.load(w); !ok {
+		_ = os.WriteFile(filePath, src, 0o644)
+		return
+	}
+	writeJSON(w, http.StatusOK, vmPowerStateResponse{
+		Name:       name,
+		PowerState: powerState,
+	})
+}
+
+func (a *server) deleteVM(w http.ResponseWriter, name string) {
+	a.createMu.Lock()
+	defer a.createMu.Unlock()
+
+	ws, ok := a.load(w)
+	if !ok {
+		return
+	}
+	document := ws.Find(nrm.Ref{Kind: v1alpha1.KindVirtualMachine, Name: name})
+	if document == nil {
+		message := fmt.Sprintf("VirtualMachine %q not found", name)
+		writeProblem(w, http.StatusNotFound, "Resource not found", message, nil)
+		return
+	}
+	filePath := filepath.Join(ws.Root, filepath.FromSlash(document.File))
+	src, err := os.ReadFile(filePath)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "VM delete failed", err.Error(), nil)
+		return
+	}
+	if err := os.Remove(filePath); err != nil {
+		writeProblem(w, http.StatusInternalServerError, "VM delete failed", err.Error(), nil)
+		return
+	}
+	if _, ok := a.load(w); !ok {
+		_ = os.WriteFile(filePath, src, 0o644)
+		return
+	}
+	writeJSON(w, http.StatusOK, vmDeleteResponse{
+		Name:    name,
+		Deleted: true,
+	})
+}
+
+func vmKeyOrder(path []string) []string {
+	switch strings.Join(path, ".") {
+	case "":
+		return []string{"apiVersion", "kind", "metadata", "spec"}
+	case "metadata":
+		return []string{"name", "uid", "labels", "annotations"}
+	case "spec":
+		return []string{"placement", "identity", "source", "resources", "disks", "nics", "guest", "ha", "policies", "lifecycle", "proxmox"}
+	case "spec.lifecycle":
+		return []string{"powerState", "protection", "startOnBoot", "ignoreDrift"}
+	}
+	return nil
 }
 
 func (a *server) loadForCommand(w http.ResponseWriter, title string) (*workspace.Workspace, bool) {

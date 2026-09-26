@@ -374,3 +374,159 @@ func TestInsertErrors(t *testing.T) {
 		t.Errorf("err = %v, want ErrExists", err)
 	}
 }
+func TestSet(t *testing.T) {
+	tests := []struct {
+		name  string
+		src   string
+		edits []Edit
+		want  string
+	}{
+		{
+			name: "replace plain scalar in block mapping, preserve comment",
+			src: `spec:
+  lifecycle:
+    powerState: running # keep running
+    protection: true
+`,
+			edits: []Edit{{Line: 1, Path: []string{"spec", "lifecycle", "powerState"}, Value: "stopped"}},
+			want: `spec:
+  lifecycle:
+    powerState: stopped # keep running
+    protection: true
+`,
+		},
+		{
+			name: "replace double-quoted scalar",
+			src: `spec:
+  lifecycle:
+    powerState: "running" # double quoted
+`,
+			edits: []Edit{{Line: 1, Path: []string{"spec", "lifecycle", "powerState"}, Value: "stopped"}},
+			want: `spec:
+  lifecycle:
+    powerState: stopped # double quoted
+`,
+		},
+		{
+			name: "replace single-quoted scalar",
+			src: `spec:
+  lifecycle:
+    powerState: 'running'
+`,
+			edits: []Edit{{Line: 1, Path: []string{"spec", "lifecycle", "powerState"}, Value: "stopped"}},
+			want: `spec:
+  lifecycle:
+    powerState: stopped
+`,
+		},
+		{
+			name:  "replace flow mapping scalar",
+			src:   "ipv4: { mode: auto, dhcp: false }\n",
+			edits: []Edit{{Line: 1, Path: []string{"ipv4", "mode"}, Value: "manual"}},
+			want:  "ipv4: { mode: manual, dhcp: false }\n",
+		},
+		{
+			name: "replace empty scalar in block mapping",
+			src: `spec:
+  lifecycle:
+    powerState:
+    protection: true
+`,
+			edits: []Edit{{Line: 1, Path: []string{"spec", "lifecycle", "powerState"}, Value: "running"}},
+			want: `spec:
+  lifecycle:
+    powerState: running
+    protection: true
+`,
+		},
+		{
+			name: "insert new key into existing mapping if not present",
+			src: `spec:
+  lifecycle:
+    protection: true
+`,
+			edits: []Edit{{Line: 1, Path: []string{"spec", "lifecycle", "powerState"}, Value: "running"}},
+			want: `spec:
+  lifecycle:
+    protection: true
+    powerState: running
+`,
+		},
+		{
+			name: "insert mapping and key if not present",
+			src: `spec:
+  source:
+    template: debian-12
+`,
+			edits: []Edit{{Line: 1, Path: []string{"spec", "lifecycle", "powerState"}, Value: "running"}},
+			want: `spec:
+  source:
+    template: debian-12
+  lifecycle:
+    powerState: running
+`,
+		},
+		{
+			name: "replace scalar in sequence",
+			src: `tags:
+  - prod
+  - web
+`,
+			edits: []Edit{{Line: 1, Path: []string{"tags", "0"}, Value: "stage"}},
+			want: `tags:
+  - stage
+  - web
+`,
+		},
+		{
+			name: "multiple edits inserting and updating",
+			src: `spec:
+  lifecycle:
+    powerState: running
+`,
+			edits: []Edit{
+				{Line: 1, Path: []string{"spec", "lifecycle", "powerState"}, Value: "stopped"},
+				{Line: 1, Path: []string{"spec", "lifecycle", "protection"}, Value: true},
+			},
+			want: `spec:
+  lifecycle:
+    powerState: stopped
+    protection: true
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Set([]byte(tt.src), tt.edits, nil)
+			if err != nil {
+				t.Fatalf("Set failed: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("Set =\n%s\nwant:\n%s", string(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestSetErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		edit Edit
+		want string
+	}{
+		{"target is not a scalar", "a:\n  b: { c: 1 }\n", Edit{Line: 1, Path: []string{"a", "b"}, Value: 2}, "a.b is not a scalar"},
+		{"empty path", "a: 1\n", Edit{Line: 1, Value: 2}, "the path is empty"},
+		{"unknown document", "a: 1\n", Edit{Line: 2, Path: []string{"b"}, Value: 2}, "no document starts at line 2"},
+		{"alias on path", "a: &x { b: 1 }\nc: *x\n", Edit{Line: 1, Path: []string{"c", "d"}, Value: 2}, "c is an alias"},
+		{"not a scalar value", "a: 1\n", Edit{Line: 1, Path: []string{"a"}, Value: []int{1}}, "is not a string, a number or a boolean"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Set([]byte(tt.src), []Edit{tt.edit}, nil)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Set = %q, %v; want an error with %q", got, err, tt.want)
+			}
+		})
+	}
+}

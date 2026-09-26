@@ -77,6 +77,33 @@ func Insert(src []byte, edits []Edit, order Order) ([]byte, error) {
 	return f.src, nil
 }
 
+// Set returns src with the fields of edits added or replaced, in order.
+// If a field already exists and is a scalar, its value is replaced while
+// preserving surrounding formatting and comments. If a field does not exist,
+// it is inserted just as by Insert.
+func Set(src []byte, edits []Edit, order Order) ([]byte, error) {
+	f, err := parse(src)
+	if err != nil {
+		return nil, err
+	}
+	docs := make([]int, len(edits))
+	for i, e := range edits {
+		if docs[i] = f.document(e.Line); docs[i] < 0 {
+			return nil, fmt.Errorf("no document starts at line %d", e.Line)
+		}
+	}
+	for i, e := range edits {
+		orderForEdit := order
+		if e.Order != nil {
+			orderForEdit = e.Order
+		}
+		if f, err = f.set(docs[i], e.Path, e.Value, orderForEdit); err != nil {
+			return nil, fmt.Errorf("line %d: %s: %w", e.Line, name(e.Path), err)
+		}
+	}
+	return f.src, nil
+}
+
 // file is a parsed YAML file.
 type file struct {
 	src []byte
@@ -178,6 +205,153 @@ func (f *file) insert(doc int, path []string, value any, order Order) (*file, er
 		}
 	}
 	return nil, ErrExists
+}
+func (f *file) set(doc int, path []string, value any, order Order) (*file, error) {
+	if len(path) == 0 {
+		return nil, errors.New("the path is empty")
+	}
+	var steps []step
+	n := f.docs[doc].Content[0]
+	for i, seg := range path {
+		last := i == len(path)-1
+		switch n.Kind {
+		case yaml.MappingNode:
+			k := keyIndex(n, seg)
+			if k < 0 {
+				var keyOrder []string
+				if order != nil {
+					keyOrder = order(path[:i])
+				}
+				out, err := f.add(doc, steps, n, path[i:], value, keyOrder)
+				if err != nil {
+					return nil, err
+				}
+				return f.verify(out, doc, path, value)
+			}
+			if !last {
+				steps = append(steps, step{node: n, index: k})
+				n = n.Content[k+1]
+				continue
+			}
+			valNode := n.Content[k+1]
+			if valNode.Kind != yaml.ScalarNode {
+				return nil, fmt.Errorf("%s is not a scalar", name(path))
+			}
+			out, err := f.replaceScalar(doc, steps, n, k, valNode, value)
+			if err != nil {
+				return nil, err
+			}
+			return f.verify(out, doc, path, value)
+		case yaml.SequenceNode:
+			idx, err := strconv.Atoi(seg)
+			if err != nil || idx < 0 || idx >= len(n.Content) {
+				return nil, fmt.Errorf("%s has no item %s", name(path[:i]), seg)
+			}
+			if !last {
+				steps = append(steps, step{node: n, index: idx})
+				n = n.Content[idx]
+				continue
+			}
+			valNode := n.Content[idx]
+			if valNode.Kind != yaml.ScalarNode {
+				return nil, fmt.Errorf("%s is not a scalar", name(path))
+			}
+			out, err := f.replaceScalar(doc, steps, n, idx, valNode, value)
+			if err != nil {
+				return nil, err
+			}
+			return f.verify(out, doc, path, value)
+		case yaml.AliasNode:
+			return nil, fmt.Errorf("%s is an alias; edit the node it refers to instead", name(path[:i]))
+		default:
+			return nil, fmt.Errorf("%s is not a mapping", name(path[:i]))
+		}
+	}
+	return nil, errors.New("cannot set root")
+}
+
+func (f *file) replaceScalar(doc int, steps []step, parent *yaml.Node, k int, valNode *yaml.Node, value any) ([]byte, error) {
+	flow := parent.Style&yaml.FlowStyle != 0
+	text, err := scalar(value, flow)
+	if err != nil {
+		return nil, err
+	}
+	if flow {
+		if valNode.Value == "" {
+			off := f.offset(valNode.Line, valNode.Column)
+			start := off
+			if start < len(f.src) && f.src[start] == ' ' {
+				start++
+			} else {
+				text = " " + text
+			}
+			return f.splice(start, start, text), nil
+		}
+		start := f.skipProperties(f.offset(valNode.Line, valNode.Column))
+		end, err := f.flowEnd(valNode)
+		if err != nil {
+			return nil, err
+		}
+		return f.splice(start, end, text), nil
+	}
+
+	if valNode.Value == "" {
+		if parent.Kind == yaml.MappingNode {
+			kNode := parent.Content[k]
+			kStart := f.offset(kNode.Line, kNode.Column)
+			colon := bytes.IndexByte(f.src[kStart:], ':')
+			if colon < 0 {
+				return nil, f.unexpected(kNode.Line)
+			}
+			afterColon := kStart + colon + 1
+			p := afterColon
+			for p < len(f.src) && f.src[p] == ' ' {
+				p++
+			}
+			if p < len(f.src) && f.src[p] == '#' {
+				return f.splice(afterColon, afterColon, " "+text), nil
+			}
+			return f.splice(afterColon, p, " "+text), nil
+		}
+		off := f.offset(valNode.Line, valNode.Column)
+		return f.splice(off, off, text), nil
+	}
+
+	start := f.skipProperties(f.offset(valNode.Line, valNode.Column))
+	var end int
+	switch {
+	case valNode.Style&yaml.DoubleQuotedStyle != 0:
+		end, err = f.quotedEnd(start, '"', valNode.Line)
+		if err != nil {
+			return nil, err
+		}
+	case valNode.Style&yaml.SingleQuotedStyle != 0:
+		end, err = f.quotedEnd(start, '\'', valNode.Line)
+		if err != nil {
+			return nil, err
+		}
+	case valNode.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0:
+		indent := valNode.Column - 1
+		end = f.backOver(f.next(doc, steps, parent, k), indent)
+		for end > start && (f.src[end-1] == '\n' || f.src[end-1] == '\r') {
+			end--
+		}
+	default:
+		end = start
+		for i := start; i < len(f.src); i++ {
+			c := f.src[i]
+			if c == '\n' || c == '\r' {
+				break
+			}
+			if c == '#' && i > start && isSpace(f.src[i-1]) {
+				break
+			}
+			if !isSpace(c) {
+				end = i + 1
+			}
+		}
+	}
+	return f.splice(start, end, text), nil
 }
 
 func keyIndex(m *yaml.Node, key string) int {
@@ -282,8 +456,12 @@ func after(m *yaml.Node, key string, order []string) int {
 // key or item of an enclosing collection, or the next document. It
 // returns the end of the file if nothing follows.
 func (f *file) next(doc int, steps []step, m *yaml.Node, k int) int {
-	if k+2 < len(m.Content) {
-		return f.lines[m.Content[k+2].Line-1]
+	width := 2
+	if m.Kind == yaml.SequenceNode {
+		width = 1
+	}
+	if k+width < len(m.Content) {
+		return f.lines[m.Content[k+width].Line-1]
 	}
 	for i := len(steps) - 1; i >= 0; i-- {
 		s := steps[i]

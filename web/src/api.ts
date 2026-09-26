@@ -30,6 +30,7 @@ export interface VirtualMachine {
   memory: string;
   environment: string;
   addresses: string[];
+  powerState: string;
 }
 
 export type VMSize = "S" | "M" | "L";
@@ -122,6 +123,48 @@ export function createVM(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: "vm.create", params }),
+    },
+  );
+}
+
+export function startVM(
+  workspace: string,
+  name: string,
+): Promise<{ name: string; powerState: string }> {
+  return fetchJSON(
+    `${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: "vm.start", params: { name } }),
+    },
+  );
+}
+
+export function stopVM(
+  workspace: string,
+  name: string,
+): Promise<{ name: string; powerState: string }> {
+  return fetchJSON(
+    `${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: "vm.stop", params: { name } }),
+    },
+  );
+}
+
+export function deleteVM(
+  workspace: string,
+  name: string,
+): Promise<{ name: string; deleted: boolean }> {
+  return fetchJSON(
+    `${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: "vm.delete", params: { name } }),
     },
   );
 }

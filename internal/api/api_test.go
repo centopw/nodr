@@ -180,7 +180,8 @@ func TestListResources(t *testing.T) {
 			"items": []any{map[string]any{
 				"kind": "VirtualMachine", "name": "web-01", "cluster": "pve-main", "node": "pve1",
 				"vmid": float64(1012), "cpu": float64(2), "memory": "8Gi", "environment": "prod",
-				"addresses": []any{"10.0.20.21/24"},
+				"addresses":  []any{"10.0.20.21/24"},
+				"powerState": "running",
 			}},
 		},
 		"ProxmoxCluster": map[string]any{"items": []any{map[string]any{"kind": "ProxmoxCluster", "name": "pve-main"}}},
@@ -386,8 +387,8 @@ func TestCreateVMValidation(t *testing.T) {
 
 func TestCreateVMRejectsUnknownCommand(t *testing.T) {
 	root := testWorkspace(t)
-	response := request(t, testHandler(t, root), http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{"command": "vm.delete"})
-	checkProblem(t, response, http.StatusBadRequest, "Unknown command", "command", "vm.delete")
+	response := request(t, testHandler(t, root), http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{"command": "vm.destroy"})
+	checkProblem(t, response, http.StatusBadRequest, "Unknown command", "command", "vm.destroy")
 }
 
 func TestSizeCatalogAndSummaryWithoutAddress(t *testing.T) {
@@ -921,4 +922,228 @@ func TestWorkspaceApplyConflict(t *testing.T) {
 	r.SetPathValue("workspace", "homelab")
 	s.runCommand(w, r)
 	checkProblem(t, w, http.StatusConflict, "Conflict", "", "another plan or apply is already running")
+}
+
+func TestVMLifecycleCommands(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+
+	// 1. Initial power state should default to "running" in listResources
+	res := request(t, handler, http.MethodGet, "/api/v1/workspaces/homelab/resources?kind=VirtualMachine", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("listResources status = %d: %s", res.Code, res.Body.String())
+	}
+	var list struct {
+		Items []virtualMachineItem `json:"items"`
+	}
+	decodeResponse(t, res, &list)
+	if len(list.Items) != 1 || list.Items[0].PowerState != "running" {
+		t.Fatalf("unexpected items: %#v", list.Items)
+	}
+
+	// 2. Stop the VM via vm.stop command
+	stopRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.stop",
+		"params":  map[string]any{"name": "web-01"},
+	})
+	if stopRes.Code != http.StatusOK {
+		t.Fatalf("vm.stop status = %d: %s", stopRes.Code, stopRes.Body.String())
+	}
+	var stopBody vmPowerStateResponse
+	decodeResponse(t, stopRes, &stopBody)
+	if stopBody.Name != "web-01" || stopBody.PowerState != "stopped" {
+		t.Errorf("stopBody = %#v, want name web-01, powerState stopped", stopBody)
+	}
+
+	// Verify persistence in YAML file
+	content, err := os.ReadFile(filepath.Join(root, "intent", "compute", "web-01.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "powerState: stopped") {
+		t.Errorf("yaml content missing powerState: stopped: %s", string(content))
+	}
+
+	// Verify listResources reports stopped
+	res = request(t, handler, http.MethodGet, "/api/v1/workspaces/homelab/resources?kind=VirtualMachine", nil)
+	decodeResponse(t, res, &list)
+	if len(list.Items) != 1 || list.Items[0].PowerState != "stopped" {
+		t.Fatalf("expected powerState stopped, got %#v", list.Items)
+	}
+
+	// 3. Start the VM via vm.start command
+	startRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.start",
+		"params":  map[string]any{"name": "web-01"},
+	})
+	if startRes.Code != http.StatusOK {
+		t.Fatalf("vm.start status = %d: %s", startRes.Code, startRes.Body.String())
+	}
+	var startBody vmPowerStateResponse
+	decodeResponse(t, startRes, &startBody)
+	if startBody.Name != "web-01" || startBody.PowerState != "running" {
+		t.Errorf("startBody = %#v, want name web-01, powerState running", startBody)
+	}
+
+	content, err = os.ReadFile(filepath.Join(root, "intent", "compute", "web-01.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "powerState: running") {
+		t.Errorf("yaml content missing powerState: running: %s", string(content))
+	}
+
+	// 4. Delete the VM via vm.delete command
+	delRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.delete",
+		"params":  map[string]any{"name": "web-01"},
+	})
+	if delRes.Code != http.StatusOK {
+		t.Fatalf("vm.delete status = %d: %s", delRes.Code, delRes.Body.String())
+	}
+	var delBody vmDeleteResponse
+	decodeResponse(t, delRes, &delBody)
+	if delBody.Name != "web-01" || !delBody.Deleted {
+		t.Errorf("delBody = %#v, want name web-01, deleted true", delBody)
+	}
+
+	// Verify file is removed
+	if _, err := os.Stat(filepath.Join(root, "intent", "compute", "web-01.yaml")); !os.IsNotExist(err) {
+		t.Errorf("expected file removed, err = %v", err)
+	}
+
+	// Subsequent operations on web-01 return 404
+	subsequentRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.stop",
+		"params":  map[string]any{"name": "web-01"},
+	})
+	checkProblem(t, subsequentRes, http.StatusNotFound, "Resource not found", "", "web-01")
+
+	// listResources returns 0 items
+	res = request(t, handler, http.MethodGet, "/api/v1/workspaces/homelab/resources?kind=VirtualMachine", nil)
+	decodeResponse(t, res, &list)
+	if len(list.Items) != 0 {
+		t.Errorf("expected 0 items, got %#v", list.Items)
+	}
+}
+
+func TestVMLifecycleRESTEndpoints(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+
+	// Stop via :stop POST
+	stopRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/resources/VirtualMachine/web-01:stop", nil)
+	if stopRes.Code != http.StatusOK {
+		t.Fatalf("REST :stop status = %d: %s", stopRes.Code, stopRes.Body.String())
+	}
+	var stopBody vmPowerStateResponse
+	decodeResponse(t, stopRes, &stopBody)
+	if stopBody.PowerState != "stopped" {
+		t.Errorf("expected stopped, got %q", stopBody.PowerState)
+	}
+
+	// Start via :start POST
+	startRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/resources/VirtualMachine/web-01:start", nil)
+	if startRes.Code != http.StatusOK {
+		t.Fatalf("REST :start status = %d: %s", startRes.Code, startRes.Body.String())
+	}
+	var startBody vmPowerStateResponse
+	decodeResponse(t, startRes, &startBody)
+	if startBody.PowerState != "running" {
+		t.Errorf("expected running, got %q", startBody.PowerState)
+	}
+
+	// Delete via DELETE
+	delRes := request(t, handler, http.MethodDelete, "/api/v1/workspaces/homelab/resources/VirtualMachine/web-01", nil)
+	if delRes.Code != http.StatusOK {
+		t.Fatalf("REST DELETE status = %d: %s", delRes.Code, delRes.Body.String())
+	}
+	var delBody vmDeleteResponse
+	decodeResponse(t, delRes, &delBody)
+	if !delBody.Deleted {
+		t.Errorf("expected deleted true, got false")
+	}
+
+	// Verify file is removed
+	if _, err := os.Stat(filepath.Join(root, "intent", "compute", "web-01.yaml")); !os.IsNotExist(err) {
+		t.Errorf("expected file removed, err = %v", err)
+	}
+
+	// Subsequent DELETE returns 404
+	del404 := request(t, handler, http.MethodDelete, "/api/v1/workspaces/homelab/resources/VirtualMachine/web-01", nil)
+	checkProblem(t, del404, http.StatusNotFound, "Resource not found", "", "web-01")
+}
+
+func TestVMLifecycleRESTDeleteSuffix(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+
+	// Delete via POST ...:delete
+	delRes := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/resources/VirtualMachine/web-01:delete", nil)
+	if delRes.Code != http.StatusOK {
+		t.Fatalf("REST :delete status = %d: %s", delRes.Code, delRes.Body.String())
+	}
+	var delBody vmDeleteResponse
+	decodeResponse(t, delRes, &delBody)
+	if !delBody.Deleted {
+		t.Errorf("expected deleted true, got false")
+	}
+	if _, err := os.Stat(filepath.Join(root, "intent", "compute", "web-01.yaml")); !os.IsNotExist(err) {
+		t.Errorf("expected file removed, err = %v", err)
+	}
+}
+
+func TestVMLifecycleValidationErrors(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+
+	// 1. Missing name parameter
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.start",
+	})
+	checkProblem(t, res, http.StatusBadRequest, "Invalid request", "name", "name is required")
+
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.start",
+		"params":  map[string]any{"name": ""},
+	})
+	checkProblem(t, res, http.StatusBadRequest, "Invalid request", "name", "name is required")
+
+	// 2. Unknown fields in params
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.stop",
+		"params":  map[string]any{"name": "web-01", "extra": "field"},
+	})
+	checkProblem(t, res, http.StatusBadRequest, "Invalid request", "", "unknown field")
+
+	// 3. Non-existent VM for commands
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.start",
+		"params":  map[string]any{"name": "nonexistent"},
+	})
+	checkProblem(t, res, http.StatusNotFound, "Resource not found", "", "nonexistent")
+
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "vm.delete",
+		"params":  map[string]any{"name": "nonexistent"},
+	})
+	checkProblem(t, res, http.StatusNotFound, "Resource not found", "", "nonexistent")
+
+	// 4. Non-existent VM for REST
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/resources/VirtualMachine/nonexistent:start", nil)
+	checkProblem(t, res, http.StatusNotFound, "Resource not found", "", "nonexistent")
+
+	// 5. Invalid operation for REST
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/resources/VirtualMachine/web-01", nil)
+	checkProblem(t, res, http.StatusBadRequest, "Invalid operation", "", "missing operation suffix")
+
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/resources/VirtualMachine/web-01:reboot", nil)
+	checkProblem(t, res, http.StatusBadRequest, "Unknown operation", "", "reboot")
+
+	// 6. Invalid resource kind for REST
+	res = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/resources/Network/dmz:start", nil)
+	checkProblem(t, res, http.StatusBadRequest, "Invalid resource kind", "", "Network")
+
+	res = request(t, handler, http.MethodDelete, "/api/v1/workspaces/homelab/resources/Network/dmz", nil)
+	checkProblem(t, res, http.StatusBadRequest, "Invalid resource kind", "", "Network")
 }
