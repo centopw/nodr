@@ -50,14 +50,33 @@ button:disabled {
   opacity: 0.65;
 }
 
-.button-secondary {
+.button-secondary,
+.btn-secondary {
   color: #25314a;
   background: #fff;
   border-color: #aeb8c8;
 }
 
-.button-secondary:hover:not(:disabled) {
+.button-secondary:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled) {
   background: #eef1f5;
+}
+
+.btn-danger {
+  color: #fff;
+  background: #b52d25;
+  border-color: #b52d25;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #96221b;
+}
+
+.action-btn {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 0.35rem;
 }
 
 .app-shell {
@@ -353,6 +372,91 @@ legend {
 .unit-outcomes {
   margin: 0.5rem 0 0;
   padding-left: 1.25rem;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  line-height: 1.2;
+}
+
+.status-running {
+  background: #eaf8f0;
+  color: #185a37;
+  border: 1px solid #81c69f;
+}
+
+.status-stopped {
+  background: #f1f3f6;
+  color: #556070;
+  border: 1px solid #d0d6e0;
+}
+
+.status-unmanaged {
+  background: #edf2fc;
+  color: #2b5cb8;
+  border: 1px solid #b8cefa;
+}
+
+.actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-dialog {
+  background: #fff;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  max-width: 28rem;
+  width: 100%;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  border: 1px solid #d9dee7;
+}
+
+.modal-dialog h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem;
+}
+
+.modal-dialog p {
+  color: #3b4657;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin-bottom: 1.25rem;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.error-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.error-banner-content {
+  flex: 1;
 }
 
 @media (max-width: 42rem) {

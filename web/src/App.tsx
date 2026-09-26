@@ -78,30 +78,7 @@ export default function App() {
     };
   }, []);
 
-  async function handleCreated(summary: string) {
-    if (!data) {
-      return;
-    }
-
-    setView("list");
-
-    try {
-      const virtualMachines = await listResources<VirtualMachine>(
-        data.workspace,
-        "VirtualMachine",
-      );
-      setData((current) =>
-        current ? { ...current, virtualMachines } : current,
-      );
-      setSuccess(summary);
-    } catch {
-      setSuccess(
-        `${summary} The list could not be refreshed — reload the page.`,
-      );
-    }
-  }
-
-  async function handleApplied() {
+  async function refreshVMs() {
     if (!data) {
       return;
     }
@@ -117,6 +94,27 @@ export default function App() {
     } catch {
       // Background refresh failure is non-fatal
     }
+  }
+
+  async function handleCreated(summary: string) {
+    if (!data) {
+      return;
+    }
+
+    setView("list");
+
+    try {
+      await refreshVMs();
+      setSuccess(summary);
+    } catch {
+      setSuccess(
+        `${summary} The list could not be refreshed — reload the page.`,
+      );
+    }
+  }
+
+  async function handleApplied() {
+    await refreshVMs();
   }
 
   if (loading) {
@@ -186,7 +184,11 @@ export default function App() {
             </div>
           ) : null}
 
-          <VMList virtualMachines={data.virtualMachines} />
+          <VMList
+            virtualMachines={data.virtualMachines}
+            workspace={data.workspace}
+            onRefresh={refreshVMs}
+          />
         </section>
       ) : view === "new" ? (
         <NewVMForm
