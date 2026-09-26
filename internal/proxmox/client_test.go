@@ -69,7 +69,7 @@ func TestClient_APIToken_Header(t *testing.T) {
 func TestClient_RedactsCredentialsInErrors(t *testing.T) {
 	tokenSecret := "super-secret-token-uuid"
 	srv := proxmoxtest.NewServer(t, map[string]http.HandlerFunc{
-		"GET /api2/json/fail": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/fail": func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"message":"invalid request containing super-secret-token-uuid"}`))

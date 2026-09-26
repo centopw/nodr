@@ -1,3 +1,4 @@
+// Package proxmox provides a REST API client for Proxmox VE.
 package proxmox
 
 import (
@@ -22,6 +23,7 @@ type Client struct {
 	tokenSecret string
 }
 
+// NewClient creates a new Proxmox VE API client for the given endpoint.
 func NewClient(endpoint string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -37,6 +39,7 @@ type ticketResponse struct {
 	CSRFPreventionToken string `json:"CSRFPreventionToken"`
 }
 
+// Login authenticates against the Proxmox VE API and sets up the session ticket and CSRF token.
 func (c *Client) Login(ctx context.Context, realm, username, password string) error {
 	form := url.Values{
 		"username": {fmt.Sprintf("%s@%s", username, realm)},
@@ -53,6 +56,7 @@ func (c *Client) Login(ctx context.Context, realm, username, password string) er
 	return nil
 }
 
+// SetAPIToken configures API token authentication using the provided credentials.
 func (c *Client) SetAPIToken(user, tokenID, secret string) {
 	c.authToken = fmt.Sprintf("PVEAPIToken=%s!%s=%s", user, tokenID, secret)
 	c.tokenSecret = secret

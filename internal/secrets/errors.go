@@ -1,3 +1,4 @@
+// Package secrets provides envelope-encrypted secret storage.
 package secrets
 
 import "errors"

@@ -9,14 +9,14 @@ type Version struct {
 
 // ClusterNode holds one node's status from GET /cluster/status.
 type ClusterNode struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"` // "cluster" or "node"
-	IP      string `json:"ip"`
-	Online  int    `json:"online"`
-	Level   string `json:"level"`
-	Local   int    `json:"local"`
-	NodeID  int    `json:"nodeid"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Type   string `json:"type"` // "cluster" or "node"
+	IP     string `json:"ip"`
+	Online int    `json:"online"`
+	Level  string `json:"level"`
+	Local  int    `json:"local"`
+	NodeID int    `json:"nodeid"`
 }
 
 // ClusterResource holds one resource from GET /cluster/resources?type=vm.

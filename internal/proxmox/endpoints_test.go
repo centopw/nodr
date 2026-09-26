@@ -11,10 +11,10 @@ import (
 
 func TestEndpoints(t *testing.T) {
 	srv := proxmoxtest.NewServer(t, map[string]http.HandlerFunc{
-		"GET /api2/json/version": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/version": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `{"release":"8.2","repoid":"1","version":"8.2.4"}`)
 		},
-		"GET /api2/json/cluster/status": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/cluster/status": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `[{"id":"node/pve1","name":"pve1","type":"node","online":1}]`)
 		},
 		"GET /api2/json/cluster/resources": func(w http.ResponseWriter, r *http.Request) {
@@ -23,25 +23,25 @@ func TestEndpoints(t *testing.T) {
 			}
 			proxmoxtest.JSONResponse(w, http.StatusOK, `[{"id":"qemu/100","vmid":100,"name":"test-vm","node":"pve1","type":"qemu","status":"running"}]`)
 		},
-		"GET /api2/json/nodes/pve1/qemu": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/nodes/pve1/qemu": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `[{"vmid":100,"name":"test-vm","status":"running","cpus":2}]`)
 		},
-		"GET /api2/json/nodes/pve1/qemu/100/config": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/nodes/pve1/qemu/100/config": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `{"digest":"abc123sha1","cores":2,"memory":2048,"name":"test-vm"}`)
 		},
-		"GET /api2/json/nodes/pve1/certificates/info": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/nodes/pve1/certificates/info": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `[{"fingerprint":"AA:BB:CC:DD"}]`)
 		},
-		"POST /api2/json/access/users": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api2/json/access/users": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, "")
 		},
-		"POST /api2/json/access/roles": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api2/json/access/roles": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, "")
 		},
-		"PUT /api2/json/access/acl": func(w http.ResponseWriter, r *http.Request) {
+		"PUT /api2/json/access/acl": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, "")
 		},
-		"POST /api2/json/access/users/nodr@pve/token/nodr-token": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api2/json/access/users/nodr@pve/token/nodr-token": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `{"value":"token-secret-uuid-1234"}`)
 		},
 	})

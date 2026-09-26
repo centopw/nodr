@@ -27,7 +27,7 @@ func NewServer(t *testing.T, handlers map[string]http.HandlerFunc) *httptest.Ser
 			t.Errorf("proxmoxtest: unexpected request %s (registered: %s)", key, strings.Join(keys(handlers), ", "))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotImplemented)
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"message":"unexpected request: %s"}`, key)))
+			_, _ = fmt.Fprintf(w, `{"message":"unexpected request: %s"}`, key)
 			return
 		}
 		handler(w, r)
@@ -42,14 +42,14 @@ func JSONResponse(w http.ResponseWriter, statusCode int, dataJSON string) {
 		_, _ = w.Write([]byte(`{"data":null}`))
 		return
 	}
-	_, _ = w.Write([]byte(fmt.Sprintf(`{"data":%s}`, dataJSON)))
+	_, _ = fmt.Fprintf(w, `{"data":%s}`, dataJSON)
 }
 
 // ErrorResponse writes a Proxmox VE error response.
 func ErrorResponse(w http.ResponseWriter, statusCode int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	_, _ = w.Write([]byte(fmt.Sprintf(`{"message":"%s"}`, message)))
+	_, _ = fmt.Fprintf(w, `{"message":"%s"}`, message)
 }
 
 func keys(m map[string]http.HandlerFunc) []string {

@@ -6,12 +6,13 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // register sqlite driver
 )
 
 // Store is an envelope-encrypted, SQLite-backed store for secrets.
@@ -123,7 +124,7 @@ func (s *Store) Resolve(ctx context.Context, ref string) ([]byte, error) {
 
 	var wrappedKey, wrappedNonce, ciphertext, ciphertextNonce []byte
 	err := row.Scan(&wrappedKey, &wrappedNonce, &ciphertext, &ciphertextNonce)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("secrets: %s: %w", ref, ErrNotFound)
 	}
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 
 func TestNewServer_MatchedRoute(t *testing.T) {
 	srv := proxmoxtest.NewServer(t, map[string]http.HandlerFunc{
-		"GET /api2/json/version": func(w http.ResponseWriter, r *http.Request) {
+		"GET /api2/json/version": func(w http.ResponseWriter, _ *http.Request) {
 			proxmoxtest.JSONResponse(w, http.StatusOK, `{"version":"8.2.4"}`)
 		},
 	})
