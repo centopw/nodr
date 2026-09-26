@@ -139,7 +139,7 @@ func PlanUnits(ctx context.Context, ws *workspace.Workspace, only []string, plan
 	if err != nil {
 		return nil, nil, err
 	}
-	files, diags := compile.Compile(ws)
+	files, _, diags := compile.Compile(ws)
 	if out != nil {
 		for _, d := range diags {
 			fmt.Fprintln(out, d)

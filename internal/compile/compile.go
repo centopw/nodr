@@ -53,7 +53,7 @@ import (
 // managed blocks. The workspace must be valid. The result depends only on
 // the workspace, and a workspace whose code agrees with its intent gives
 // no files.
-func Compile(ws *workspace.Workspace) (map[string][]byte, diag.List) {
+func Compile(ws *workspace.Workspace) (map[string][]byte, map[string]string, diag.List) {
 	c := &compiler{
 		ws:     ws,
 		lens:   proxmoxvm.Lens{Resolver: resolve.NewIndex(ws.Documents)},
@@ -70,7 +70,22 @@ func Compile(ws *workspace.Workspace) (map[string][]byte, diag.List) {
 		c.addUnitFiles()
 	}
 	c.diags.Sort()
-	return c.changes(), c.diags
+	return c.changes(), c.unitClusters(), c.diags
+}
+
+// unitClusters returns, for each unit directory with managed blocks, the
+// single cluster its provider block reaches. Ambiguous units spanning multiple
+// clusters are omitted; addProviders diagnoses them.
+func (c *compiler) unitClusters() map[string]string {
+	out := make(map[string]string, len(c.units))
+	for dir, clusters := range c.units {
+		if len(clusters) == 1 {
+			for cluster := range clusters {
+				out[dir] = cluster
+			}
+		}
+	}
+	return out
 }
 
 // compiler holds the state of one compilation.
