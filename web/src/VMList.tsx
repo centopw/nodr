@@ -7,30 +7,16 @@ import {
   type ProblemDetails,
   type VirtualMachine,
 } from "./api";
+import Banner from "./components/Banner";
+import Button from "./components/Button";
+import FieldErrorList from "./components/FieldErrorList";
+import Modal from "./components/Modal";
+import StatusBadge from "./components/StatusBadge";
 
 export interface VMListProps {
   virtualMachines: VirtualMachine[];
   workspace?: string;
   onRefresh?: () => void | Promise<void>;
-}
-
-function renderStatusBadge(powerState: string) {
-  const normalized = (powerState || "").toLowerCase();
-  let badgeClass = "status-badge status-unmanaged";
-  let label = powerState || "unmanaged";
-
-  if (normalized === "running") {
-    badgeClass = "status-badge status-running";
-    label = "running";
-  } else if (normalized === "stopped") {
-    badgeClass = "status-badge status-stopped";
-    label = "stopped";
-  } else if (normalized === "unmanaged") {
-    badgeClass = "status-badge status-unmanaged";
-    label = "unmanaged";
-  }
-
-  return <span className={badgeClass}>{label}</span>;
 }
 
 export default function VMList({
@@ -152,28 +138,22 @@ export default function VMList({
   }
 
   const errorBanner = problem ? (
-    <div className="message message-error error-banner" role="alert">
+    <Banner variant="error" className="error-banner">
       <div className="error-banner-content">
         <p>
           <strong>{problem.title || "Error"}:</strong> {problem.detail}
         </p>
-        {problem.errors && problem.errors.length > 0 ? (
-          <ul className="field-errors">
-            {problem.errors.map((error, idx) => (
-              <li key={idx}>{error.message}</li>
-            ))}
-          </ul>
-        ) : null}
+        <FieldErrorList errors={problem.errors ?? []} />
       </div>
-      <button
-        type="button"
-        className="action-btn btn-secondary"
+      <Button
+        variant="secondary"
+        size="small"
         onClick={() => setProblem(null)}
         aria-label="Dismiss error"
       >
         Dismiss
-      </button>
-    </div>
+      </Button>
+    </Banner>
   ) : null;
 
   if (virtualMachines.length === 0) {
@@ -213,7 +193,7 @@ export default function VMList({
               return (
                 <tr key={`${vm.environment}/${vm.name}`}>
                   <td>{vm.name}</td>
-                  <td>{renderStatusBadge(vm.powerState)}</td>
+                  <td><StatusBadge powerState={vm.powerState} /></td>
                   <td>{vm.cluster}</td>
                   <td>{vm.node === "" ? "—" : vm.node}</td>
                   <td>{vm.vmid === 0 ? "—" : vm.vmid}</td>
@@ -223,33 +203,32 @@ export default function VMList({
                   <td>
                     <div className="actions-cell">
                       {isRunning ? (
-                        <button
-                          type="button"
-                          className="action-btn btn-secondary"
+                        <Button
+                          variant="secondary"
+                          size="small"
                           onClick={() => handleStop(vm.name)}
                           disabled={isLoading || !workspace}
                         >
                           {currentAction === "stop" ? "Stopping…" : "Stop"}
-                        </button>
+                        </Button>
                       ) : null}
                       {isStopped ? (
-                        <button
-                          type="button"
-                          className="action-btn"
+                        <Button
+                          size="small"
                           onClick={() => handleStart(vm.name)}
                           disabled={isLoading || !workspace}
                         >
                           {currentAction === "start" ? "Starting…" : "Start"}
-                        </button>
+                        </Button>
                       ) : null}
-                      <button
-                        type="button"
-                        className="action-btn btn-danger"
+                      <Button
+                        variant="danger"
+                        size="small"
                         onClick={() => setConfirmDeleteName(vm.name)}
                         disabled={isLoading || !workspace}
                       >
                         {currentAction === "delete" ? "Deleting…" : "Delete"}
-                      </button>
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -259,49 +238,38 @@ export default function VMList({
         </table>
       </div>
 
-      {confirmDeleteName ? (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !loadingMap[confirmDeleteName]) {
-              setConfirmDeleteName(null);
-            }
-          }}
-        >
-          <div
-            className="modal-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-delete-title"
+      <Modal
+        open={confirmDeleteName !== null}
+        onClose={() => setConfirmDeleteName(null)}
+        closeDisabled={
+          confirmDeleteName !== null && Boolean(loadingMap[confirmDeleteName])
+        }
+        titleId="confirm-delete-title"
+      >
+        <h3 id="confirm-delete-title">Confirm deletion</h3>
+        <p>
+          Delete {confirmDeleteName}? This removes the intent definition. The
+          VM will be scheduled for destruction in the next plan.
+        </p>
+        <div className="modal-actions">
+          <Button
+            variant="secondary"
+            onClick={() => setConfirmDeleteName(null)}
+            disabled={Boolean(confirmDeleteName && loadingMap[confirmDeleteName])}
           >
-            <h3 id="confirm-delete-title">Confirm deletion</h3>
-            <p>
-              Delete {confirmDeleteName}? This removes the intent definition. The VM will be scheduled for destruction in the next plan.
-            </p>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="button-secondary btn-secondary"
-                onClick={() => setConfirmDeleteName(null)}
-                disabled={Boolean(loadingMap[confirmDeleteName])}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn-danger"
-                onClick={() => handleDelete(confirmDeleteName)}
-                disabled={Boolean(loadingMap[confirmDeleteName])}
-              >
-                {loadingMap[confirmDeleteName] === "delete"
-                  ? "Deleting…"
-                  : "Delete"}
-              </button>
-            </div>
-          </div>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => confirmDeleteName && handleDelete(confirmDeleteName)}
+            disabled={Boolean(confirmDeleteName && loadingMap[confirmDeleteName])}
+          >
+            {confirmDeleteName && loadingMap[confirmDeleteName] === "delete"
+              ? "Deleting…"
+              : "Delete"}
+          </Button>
         </div>
-      ) : null}
+      </Modal>
     </>
   );
 }

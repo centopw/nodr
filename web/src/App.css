@@ -50,14 +50,12 @@ button:disabled {
   opacity: 0.65;
 }
 
-.button-secondary,
 .btn-secondary {
   color: #25314a;
   background: #fff;
   border-color: #aeb8c8;
 }
 
-.button-secondary:hover:not(:disabled),
 .btn-secondary:hover:not(:disabled) {
   background: #eef1f5;
 }

@@ -7,6 +7,9 @@ import {
   type NamedResource,
   type VMSize,
 } from "./api";
+import Banner from "./components/Banner";
+import Button from "./components/Button";
+import FieldErrorList from "./components/FieldErrorList";
 
 interface NewVMFormProps {
   workspace: string;
@@ -84,17 +87,8 @@ export default function NewVMForm({
   }
 
   function renderFieldErrors(field: keyof CreateVMParams) {
-    const errors = errorsFor(field);
-    if (errors.length === 0) {
-      return null;
-    }
-
     return (
-      <ul className="field-errors" id={`${field}-errors`}>
-        {errors.map((error, index) => (
-          <li key={`${error.path}-${index}`}>{error.message}</li>
-        ))}
-      </ul>
+      <FieldErrorList errors={errorsFor(field)} id={`${field}-errors`} />
     );
   }
 
@@ -117,7 +111,7 @@ export default function NewVMForm({
 
       <form onSubmit={handleSubmit} autoComplete="off">
         {errorSummary ? (
-          <div className="message message-error" role="alert">
+          <Banner variant="error">
             <p>{errorSummary.detail}</p>
             {errorSummary.errors && errorSummary.errors.length > 0 ? (
               <ul>
@@ -128,7 +122,7 @@ export default function NewVMForm({
                 ))}
               </ul>
             ) : null}
-          </div>
+          </Banner>
         ) : null}
 
         <div className="form-grid">
@@ -278,12 +272,12 @@ export default function NewVMForm({
         </fieldset>
 
         <div className="form-actions">
-          <button type="button" className="button-secondary" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel}>
             Cancel
-          </button>
-          <button type="submit" disabled={submitting}>
+          </Button>
+          <Button type="submit" disabled={submitting}>
             {submitting ? "Creating…" : "Create VM"}
-          </button>
+          </Button>
         </div>
       </form>
     </section>

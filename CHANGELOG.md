@@ -16,6 +16,11 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   workspace's `templates` environment range.
 - A React and Vite web UI for listing existing virtual machines and creating
   new ones through the public API.
+- Shared UI primitives (`Button`, `StatusBadge`, `Modal`, `FieldErrorList`,
+  `Banner`) under `web/src/components/`, replacing duplicated button,
+  badge, modal and message markup across the VM list, changes panel, new
+  VM form and app shell, documented in a Storybook component catalog
+  (`cd web && npm run storybook`).
 
 ### Fixed
 

@@ -16,3 +16,9 @@ coverage.out
 .terraform/
 *.tfstate
 *.tfstate.*
+
+# Local git worktrees
+/.worktrees/
+
+# Per-workspace secrets store (never enter Git; see docs/design/03-resource-model.md)
+.nodr/

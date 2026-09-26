@@ -8,6 +8,9 @@ import {
   type PlanResult,
   type ProblemDetails,
 } from "./api";
+import Banner from "./components/Banner";
+import Button from "./components/Button";
+import FieldErrorList from "./components/FieldErrorList";
 
 export interface ChangesPanelProps {
   workspace: string;
@@ -113,41 +116,27 @@ export default function ChangesPanel({
           <h2 id="changes-heading">Changes</h2>
         </div>
         {onBack ? (
-          <button type="button" className="button-secondary" onClick={onBack}>
+          <Button variant="secondary" onClick={onBack}>
             Back
-          </button>
+          </Button>
         ) : null}
       </div>
 
       <div className="changes-actions">
-        <button
-          type="button"
-          onClick={handlePlan}
-          disabled={planning || applying}
-        >
+        <Button onClick={handlePlan} disabled={planning || applying}>
           {planning ? "Planning…" : "Plan changes"}
-        </button>
-        <button
-          type="button"
-          onClick={handleApply}
-          disabled={applyDisabled}
-        >
+        </Button>
+        <Button onClick={handleApply} disabled={applyDisabled}>
           {applying ? "Applying…" : "Apply"}
-        </button>
+        </Button>
       </div>
 
       {problem ? (
-        <div className="message message-error" role="alert">
+        <Banner variant="error">
           <p>
             <strong>{problem.title || "Error"}:</strong> {problem.detail}
           </p>
-          {problem.errors && problem.errors.length > 0 ? (
-            <ul className="field-errors">
-              {problem.errors.map((error, idx) => (
-                <li key={idx}>{error.message}</li>
-              ))}
-            </ul>
-          ) : null}
+          <FieldErrorList errors={problem.errors ?? []} />
           {problem.units && problem.units.length > 0 ? (
             <ul className="unit-outcomes">
               {problem.units.map((unit) => (
@@ -157,11 +146,11 @@ export default function ChangesPanel({
               ))}
             </ul>
           ) : null}
-        </div>
+        </Banner>
       ) : null}
 
       {applyResult ? (
-        <div className="message message-success" role="status">
+        <Banner variant="success">
           <p>Changes applied:</p>
           <ul className="unit-outcomes">
             {applyResult.units.map((unit) => (
@@ -170,11 +159,11 @@ export default function ChangesPanel({
               </li>
             ))}
           </ul>
-        </div>
+        </Banner>
       ) : null}
 
       {plan && (plan.hasDestructiveChanges || (problem?.status === 400 && !allowDestroy)) ? (
-        <div className="message message-warning" role="alert">
+        <Banner variant="warning">
           <p>
             <strong>Warning:</strong> This plan contains destructive changes that
             will replace or destroy resources.
@@ -187,7 +176,7 @@ export default function ChangesPanel({
             />
             <span>I understand this will replace or destroy resources</span>
           </label>
-        </div>
+        </Banner>
       ) : null}
 
       {plan ? (
