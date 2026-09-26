@@ -14,6 +14,12 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   for public repositories, because GitHub does not store them for
   private ones, so the v0.1.0 release has checksums but no attestations.
 
+### Changed
+
+- The release and CI workflows use `goreleaser/goreleaser-action@v7` and
+  `actions/attest-build-provenance@v4`, both on the Node.js 24 runtime;
+  GitHub Actions is retiring Node.js 20.
+
 ## [0.1.0] - 2026-09-25
 
 ### Added
