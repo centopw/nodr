@@ -23,8 +23,8 @@ type Result struct {
 const (
 	// BootstrapUser is the dedicated Proxmox VE user nodr creates and
 	// authenticates as after onboarding a cluster.
-	BootstrapUser    = "nodr@pve"
-	bootstrapRole    = "NodrOperator"
+	BootstrapUser = "nodr@pve"
+	bootstrapRole = "NodrOperator"
 	// BootstrapTokenID is the API token ID nodr creates under BootstrapUser.
 	BootstrapTokenID = "nodr"
 )
