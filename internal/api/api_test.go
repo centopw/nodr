@@ -16,9 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centopw/nodr/internal/authn"
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
+	"github.com/centopw/nodr/internal/secrets"
 	"github.com/centopw/nodr/internal/workspace"
 )
 
@@ -97,6 +99,155 @@ func testWorkspace(t *testing.T) string {
 	return root
 }
 
+func authedRequest(t *testing.T, h http.Handler, req *http.Request) *http.Request {
+	t.Helper()
+	loginReq := httptest.NewRequest(http.MethodPost, apiPrefix+"/auth/login", strings.NewReader(`{"username":"admin","password":"test-password-123"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	h.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login failed: status = %d, body = %s", loginRec.Code, loginRec.Body.String())
+	}
+	cookies := loginRec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	}
+	req.AddCookie(cookies[0])
+	return req
+}
+
+func testHandlerWithAuth(t *testing.T, root string) http.Handler {
+	t.Helper()
+	dir := t.TempDir()
+	authStore, err := authn.Open(filepath.Join(dir, "authn.db"))
+	if err != nil {
+		t.Fatalf("authn.Open: %v", err)
+	}
+	t.Cleanup(func() { authStore.Close() })
+	if err := authStore.CreateAccount(t.Context(), "admin", "test-password-123"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	kek := make([]byte, 32)
+	secretsStore, err := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	if err != nil {
+		t.Fatalf("secrets.Open: %v", err)
+	}
+	t.Cleanup(func() { secretsStore.Close() })
+	_ = secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("default-test-token"))
+	return Handler(t.Context(), root, authStore, secretsStore)
+}
+
+func testHandler(t *testing.T, root string) http.Handler {
+	t.Helper()
+	return testHandlerWithAuth(t, root)
+}
+
+func TestAuthGate_RejectsUnauthenticatedListWorkspaces(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestAuthGate_RejectsUnauthenticatedCreateVM(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", strings.NewReader(`{"command":"vm.create","params":{}}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestAuthGate_AllowsAuthenticatedRequest(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorkspacePlan_ResolvesAndDoesNotLeakToken(t *testing.T) {
+	root := testWorkspace(t)
+	dir := t.TempDir()
+	authStore, err := authn.Open(filepath.Join(dir, "authn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authStore.Close()
+	if err := authStore.CreateAccount(t.Context(), "admin", "test-password-123"); err != nil {
+		t.Fatal(err)
+	}
+	kek := make([]byte, 32)
+	secretsStore, err := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secretsStore.Close()
+	if err := secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("plan-leak-check-token")); err != nil {
+		t.Fatal(err)
+	}
+	handler := Handler(t.Context(), root, authStore, secretsStore)
+
+	fake := installFakeTofu(t)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", strings.NewReader(`{"command":"workspace.plan"}`)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "plan-leak-check-token") {
+		t.Errorf("response body leaked the token: %s", rec.Body.String())
+	}
+	log, _ := os.ReadFile(fake.log)
+	if !strings.Contains(string(log), "plan-leak-check-token") {
+		t.Errorf("fake tofu log = %q, want it to contain the resolved token (proves it reached the child process)", log)
+	}
+}
+
+func TestWorkspacePlan_ErrorResponseDoesNotLeakToken(t *testing.T) {
+	root := testWorkspace(t)
+	dir := t.TempDir()
+	authStore, err := authn.Open(filepath.Join(dir, "authn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authStore.Close()
+	if err := authStore.CreateAccount(t.Context(), "admin", "test-password-123"); err != nil {
+		t.Fatal(err)
+	}
+	kek := make([]byte, 32)
+	secretsStore, err := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secretsStore.Close()
+	if err := secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("error-leak-check-token")); err != nil {
+		t.Fatal(err)
+	}
+	handler := Handler(t.Context(), root, authStore, secretsStore)
+
+	installFakeTofu(t)
+	t.Setenv("FAKE_TOFU_FAIL", "pve-main-compute init")
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", strings.NewReader(`{"command":"workspace.plan"}`)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "error-leak-check-token") {
+		t.Errorf("error response leaked the token: %s", rec.Body.String())
+	}
+}
+
 func request(t *testing.T, handler http.Handler, method, target string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
@@ -111,8 +262,9 @@ func request(t *testing.T, handler http.Handler, method, target string, body any
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	authed := authedRequest(t, handler, req)
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, req)
+	handler.ServeHTTP(response, authed)
 	return response
 }
 
@@ -121,10 +273,6 @@ func decodeResponse(t *testing.T, response *httptest.ResponseRecorder, out any) 
 	if err := json.Unmarshal(response.Body.Bytes(), out); err != nil {
 		t.Fatalf("decode response %q: %v", response.Body.String(), err)
 	}
-}
-
-func testHandler(t *testing.T, root string) http.Handler {
-	return Handler(t.Context(), root)
 }
 
 func TestListWorkspaces(t *testing.T) {
@@ -437,16 +585,34 @@ func TestCreateVMSerializesAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := testHandler(t, root)
+	loginReq := httptest.NewRequest(http.MethodPost, apiPrefix+"/auth/login", strings.NewReader(`{"username":"admin","password":"test-password-123"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login failed: %s", loginRec.Body.String())
+	}
+	cookie := loginRec.Result().Cookies()[0]
+
 	responses := make([]*httptest.ResponseRecorder, 2)
 	var wait sync.WaitGroup
 	for i, name := range []string{"web-03", "web-04"} {
 		wait.Add(1)
-		go func() {
+		go func(idx int, vmName string) {
 			defer wait.Done()
 			command := validCreateCommand()
-			command["params"].(map[string]any)["name"] = name
-			responses[i] = request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", command)
-		}()
+			command["params"].(map[string]any)["name"] = vmName
+			data, err := json.Marshal(command)
+			if err != nil {
+				return
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", bytes.NewReader(data))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			responses[idx] = rec
+		}(i, name)
 	}
 	wait.Wait()
 	for i, response := range responses {
@@ -536,15 +702,15 @@ func checkProblem(t *testing.T, response *httptest.ResponseRecorder, status int,
 const fakeTofuScript = `#!/bin/sh
 unit=$(pwd -P)
 unit=${unit##*/}
-echo "$unit $*" >> "$FAKE_TOFU_LOG"
+echo "$unit $* token=$PROXMOX_VE_API_TOKEN" >> "$FAKE_TOFU_LOG"
 for arg in "$@"; do last=$arg; done
 if [ "$FAKE_TOFU_FAIL" = "$unit $1" ]; then
-	echo "Error: $1 failed in $unit" >&2
+	echo "Error: $1 failed in $unit with token $PROXMOX_VE_API_TOKEN" >&2
 	exit 1
 fi
 case $1 in
 init)
-	echo "initialized $unit"
+	echo "initialized $unit with the token $PROXMOX_VE_API_TOKEN"
 	;;
 plan)
 	for arg in "$@"; do
@@ -818,15 +984,54 @@ func TestWorkspaceApplyExpiry(t *testing.T) {
 	tofu := installFakeTofu(t)
 	root := testWorkspace(t)
 	tofu.setPlan(t, "pve-main-compute", "create proxmox_virtual_environment_vm.web_01")
+
+	dir := t.TempDir()
+	authStore, err := authn.Open(filepath.Join(dir, "authn.db"))
+	if err != nil {
+		t.Fatalf("authn.Open: %v", err)
+	}
+	t.Cleanup(func() { authStore.Close() })
+	if err := authStore.CreateAccount(t.Context(), "admin", "test-password-123"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	kek := make([]byte, 32)
+	secretsStore, err := secrets.Open(filepath.Join(dir, "secrets.db"), kek)
+	if err != nil {
+		t.Fatalf("secrets.Open: %v", err)
+	}
+	t.Cleanup(func() { secretsStore.Close() })
+	_ = secretsStore.Put(t.Context(), "proxmox/pve-main-token", []byte("default-test-token"))
+
 	s := &server{
-		ctx:   t.Context(),
-		root:  root,
-		plans: make(map[string]*storedPlan),
+		ctx:     t.Context(),
+		root:    root,
+		plans:   make(map[string]*storedPlan),
+		secrets: secretsStore,
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+apiPrefix+"/workspaces", s.listWorkspaces)
+	mux.HandleFunc("GET "+apiPrefix+"/workspaces/{workspace}", s.getWorkspace)
+	mux.HandleFunc("GET "+apiPrefix+"/workspaces/{workspace}/resources", s.listResources)
 	mux.HandleFunc("POST "+apiPrefix+"/workspaces/{workspace}/commands", s.runCommand)
+	mux.HandleFunc("POST "+apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", s.resourceAction)
+	mux.HandleFunc("DELETE "+apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", s.deleteResource)
+	mux.HandleFunc(apiPrefix+"/workspaces", methodNotAllowed)
+	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}", methodNotAllowed)
+	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/resources", methodNotAllowed)
+	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/commands", methodNotAllowed)
+	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", methodNotAllowed)
+	mux.HandleFunc("/api/", notFound)
 
-	planRes := request(t, mux, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+	rootMux := http.NewServeMux()
+	rootMux.HandleFunc("POST "+apiPrefix+"/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		authn.LoginHandler(authStore, apiPrefix+"/auth/login").ServeHTTP(w, r)
+	})
+	rootMux.HandleFunc("POST "+apiPrefix+"/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		authn.LogoutHandler(authStore, apiPrefix+"/auth/logout").ServeHTTP(w, r)
+	})
+	rootMux.Handle("/", authn.Middleware(authStore, apiPrefix+"/auth/login", apiPrefix+"/auth/logout")(mux))
+
+	planRes := request(t, rootMux, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
 		"command": "workspace.plan",
 		"params":  map[string]any{},
 	})
@@ -837,7 +1042,7 @@ func TestWorkspaceApplyExpiry(t *testing.T) {
 	s.plans[planResp.PlanID].createdAt = time.Now().Add(-16 * time.Minute)
 	s.plansMu.Unlock()
 
-	applyRes := request(t, mux, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+	applyRes := request(t, rootMux, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
 		"command": "workspace.apply",
 		"params":  map[string]any{"planId": planResp.PlanID},
 	})

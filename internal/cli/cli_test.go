@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/centopw/nodr/internal/secrets"
 )
 
 // example is the example workspace of the repository.
@@ -51,6 +53,16 @@ func writeWorkspace(t *testing.T, files map[string]string) string {
 			t.Fatal(err)
 		}
 	}
+	t.Setenv("NODR_KEK", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	kek := make([]byte, 32)
+	store, err := secrets.Open(filepath.Join(root, ".nodr", "secrets.db"), kek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), "proxmox/pve-main-token", []byte("token-from-the-environment")); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
 	return root
 }
 

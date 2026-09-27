@@ -221,13 +221,13 @@ func checkInSync(t *testing.T, root string, ws *workspace.Workspace, files map[s
 			t.Errorf("Write wrote %s as\n%s", p, got)
 		}
 	}
-	again, diags := Compile(load(t, root))
+	again, _, diags := Compile(load(t, root))
 	checkDiags(t, diags)
 	checkFiles(t, again, nil)
 }
 
 func TestExampleIsInSync(t *testing.T) {
-	files, diags := Compile(load(t, example))
+	files, _, diags := Compile(load(t, example))
 	checkDiags(t, diags)
 	checkFiles(t, files, nil)
 }
@@ -237,9 +237,9 @@ func TestNewVMs(t *testing.T) {
 	writeFile(t, root, "intent/compute/web-02.yaml", web02)
 	writeFile(t, root, "intent/lab/pve-lab.yaml", lab)
 	ws := load(t, root)
-	files, diags := Compile(ws)
+	files, _, diags := Compile(ws)
 	checkDiags(t, diags)
-	if again, _ := Compile(ws); !reflect.DeepEqual(again, files) {
+	if again, _, _ := Compile(ws); !reflect.DeepEqual(again, files) {
 		t.Error("compiling the same workspace twice gave different files")
 	}
 	checkFiles(t, files, map[string]string{
@@ -267,7 +267,7 @@ func TestChangedVM(t *testing.T) {
 	edit(t, root, vmsPath, "  memory {\n", "  # Sized for the page cache.\n  memory {\n")
 	code := readFile(t, root, vmsPath)
 	ws := load(t, root)
-	files, diags := Compile(ws)
+	files, _, diags := Compile(ws)
 	checkDiags(t, diags)
 	checkFiles(t, files, map[string]string{
 		vmsPath: strings.Replace(code, "dedicated = 8192", "dedicated = 16384", 1),
@@ -283,7 +283,7 @@ func TestSeveralVMsInOneFile(t *testing.T) {
 	edit(t, root, "intent/compute/web-01.yaml", "memory: { size: 8Gi }", "memory: { size: 16Gi }")
 	code := readFile(t, root, vmsPath)
 	ws := load(t, root)
-	files, diags := Compile(ws)
+	files, _, diags := Compile(ws)
 	checkDiags(t, diags)
 	// Every VM sees the changes of the VMs before it in name order, and new
 	// blocks are appended in that order.
@@ -298,7 +298,7 @@ func TestUnitFiles(t *testing.T) {
 	root := copyExample(t)
 	removeFile(t, root, versionsPath)
 	removeFile(t, root, providersPath)
-	files, diags := Compile(load(t, root))
+	files, _, diags := Compile(load(t, root))
 	checkDiags(t, diags)
 	checkFiles(t, files, map[string]string{
 		versionsPath:  readFile(t, example, versionsPath),
@@ -315,7 +315,7 @@ func TestUnitFilesDeclaredElsewhere(t *testing.T) {
 		root := copyExample(t)
 		removeFile(t, root, providersPath)
 		writeFile(t, root, "terraform/pve-main-compute/main.tf", "provider \"proxmox\" {\n  endpoint = \"https://10.0.10.12:8006/\"\n}\n")
-		files, diags := Compile(load(t, root))
+		files, _, diags := Compile(load(t, root))
 		checkDiags(t, diags)
 		checkFiles(t, files, nil)
 	})
@@ -324,7 +324,7 @@ func TestUnitFilesDeclaredElsewhere(t *testing.T) {
 		root := copyExample(t)
 		removeFile(t, root, versionsPath)
 		writeFile(t, root, "terraform/pve-main-compute/terraform.tf", requiredProviders)
-		files, diags := Compile(load(t, root))
+		files, _, diags := Compile(load(t, root))
 		checkDiags(t, diags)
 		checkFiles(t, files, nil)
 	})
@@ -347,7 +347,7 @@ terraform {
 provider "random" {}
 `)
 		writeFile(t, root, "terraform/pve-main-compute/modules/vm/main.tf", requiredProviders+"\nprovider \"proxmox\" {}\n")
-		files, diags := Compile(load(t, root))
+		files, _, diags := Compile(load(t, root))
 		checkDiags(t, diags)
 		checkFiles(t, files, map[string]string{
 			versionsPath:  readFile(t, example, versionsPath),
@@ -360,7 +360,7 @@ func TestExistingUnitFilesStay(t *testing.T) {
 	root := copyExample(t)
 	edit(t, root, versionsPath, `">= 0.80, < 1.0"`, `"~> 0.85"`)
 	edit(t, root, "intent/platform/pve-main.yaml", "https://10.0.10.11:8006", "https://10.0.10.14:8006")
-	files, diags := Compile(load(t, root))
+	files, _, diags := Compile(load(t, root))
 	checkDiags(t, diags)
 	checkFiles(t, files, nil)
 }
@@ -376,14 +376,14 @@ spec:
   placement: { cluster: pve-main }
   resources: { cpu: { cores: 1 }, memory: { size: 1Gi } }
 `)
-	files, diags := Compile(load(t, root))
+	files, _, diags := Compile(load(t, root))
 	checkDiags(t, diags, "intent/compute/web-03.yaml:1: error: render web-03: spec.placement.assignedNode is empty: not admitted yet; run 'nodr admit vm/web-03' first")
 	checkFiles(t, files, nil)
 
 	// A VM with a managed block keeps the block as it is.
 	removeFile(t, root, "intent/compute/web-03.yaml")
 	edit(t, root, "intent/compute/web-01.yaml", "  identity:\n    vmid: 1012\n", "")
-	files, diags = Compile(load(t, root))
+	files, _, diags = Compile(load(t, root))
 	checkDiags(t, diags, "intent/compute/web-01.yaml:2: error: put web-01: spec.identity.vmid is not set: not admitted yet; run 'nodr admit vm/web-01' first")
 	checkFiles(t, files, nil)
 }
@@ -391,7 +391,7 @@ spec:
 func TestManagedBlockWithoutIntent(t *testing.T) {
 	root := copyExample(t)
 	removeFile(t, root, "intent/compute/dns-01.yaml")
-	files, diags := Compile(load(t, root))
+	files, _, diags := Compile(load(t, root))
 	checkDiags(t, diags, "terraform/pve-main-compute/vms.tf:2: warning: vm/dns-01 does not exist in intent; delete its managed block to delete the VM, or remove the block's nodr:managed comment to keep the VM as code you own")
 	checkFiles(t, files, nil)
 }
@@ -412,7 +412,7 @@ func TestUnmanagedBlockWithTheAddress(t *testing.T) {
 		edit(t, root, "intent/compute/web-01.yaml", "memory: { size: 8Gi }", "memory: { size: 16Gi }")
 		code := readFile(t, root, vmsPath)
 		ws := load(t, root)
-		files, diags := Compile(ws)
+		files, _, diags := Compile(ws)
 		checkDiags(t, diags)
 		// Only the managed block changes, and the other unit gets no files.
 		checkFiles(t, files, map[string]string{
@@ -424,7 +424,7 @@ func TestUnmanagedBlockWithTheAddress(t *testing.T) {
 	t.Run("in the unit of the VM", func(t *testing.T) {
 		root := copyExample(t)
 		edit(t, root, vmsPath, "# nodr:managed vm/web-01\n", "")
-		files, diags := Compile(load(t, root))
+		files, _, diags := Compile(load(t, root))
 		checkDiags(t, diags, "terraform/pve-main-compute/vms.tf: error: cannot add a managed block for vm/web-01: the unit has a resource proxmox_virtual_environment_vm.web_01 that nodr does not manage; add the comment '# nodr:managed vm/web-01' above it to let nodr manage it, or rename it")
 		checkFiles(t, files, nil)
 	})
@@ -448,7 +448,7 @@ func TestConflict(t *testing.T) {
 `)
 	edit(t, root, "intent/compute/web-01.yaml", "memory: { size: 8Gi }", "memory: { size: 16Gi }")
 	code := readFile(t, root, vmsPath)
-	files, diags := Compile(load(t, root))
+	files, _, diags := Compile(load(t, root))
 	checkDiags(t, diags, "terraform/pve-main-compute/vms.tf:2: error: cannot update the managed block of vm/dns-01: intent removes blocks that hold code-owned values or extensions (disk[1]); delete them by hand or keep them in intent")
 	// dns-01 is skipped, web-01 is not.
 	checkFiles(t, files, map[string]string{
@@ -460,7 +460,7 @@ func TestSyntaxError(t *testing.T) {
 	root := copyExample(t)
 	writeFile(t, root, "terraform/pve-main-compute/broken.tf", "variable \"x\" {\n  default =\n}\n")
 	edit(t, root, "intent/compute/web-01.yaml", "memory: { size: 8Gi }", "memory: { size: 16Gi }")
-	files, diags := Compile(load(t, root))
+	files, _, diags := Compile(load(t, root))
 	// The broken file could hold managed blocks, so nothing changes.
 	checkDiags(t, diags, "terraform/pve-main-compute/broken.tf:2: error: invalid HCL: Invalid expression; Expected the start of an expression, but found an invalid expression token.")
 	checkFiles(t, files, nil)
@@ -474,7 +474,7 @@ func TestHiddenFiles(t *testing.T) {
 	const invalid = "variable \"x\" {\n  default =\n}\n"
 	writeFile(t, root, "terraform/pve-main-compute/.#vms.tf", invalid)
 	writeFile(t, root, "terraform/pve-main-compute/.terraform/modules/net/main.tf", invalid)
-	files, diags := Compile(load(t, root))
+	files, _, diags := Compile(load(t, root))
 	checkDiags(t, diags)
 	checkFiles(t, files, nil)
 }
@@ -487,7 +487,7 @@ func TestUnitWithSeveralClusters(t *testing.T) {
 	// providers.tf.
 	writeFile(t, root, vmsPath, readFile(t, root, vmsPath)+"\n"+render(t, ws, "lab-01"))
 	removeFile(t, root, providersPath)
-	files, diags := Compile(ws)
+	files, _, diags := Compile(ws)
 	checkDiags(t, diags, "terraform/pve-main-compute/providers.tf: error: cannot create the file: the unit holds VMs of the clusters pve-lab, pve-main, but its provider can reach only one; move the managed blocks of each cluster into a unit of its own")
 	checkFiles(t, files, nil)
 }
@@ -504,5 +504,28 @@ func TestWriteChecksPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "terraform")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Write wrote files although a path was invalid: %v", err)
+	}
+}
+
+func TestCompile_UnitClusters(t *testing.T) {
+	ws := load(t, example)
+	_, unitClusters, diags := Compile(ws)
+	checkDiags(t, diags)
+	want := map[string]string{
+		"terraform/pve-main-compute": "pve-main",
+	}
+	if !reflect.DeepEqual(unitClusters, want) {
+		t.Errorf("unitClusters = %v, want %v", unitClusters, want)
+	}
+}
+
+func TestCompile_UnitClusters_NoManagedVMs(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "nodr.yaml", "apiVersion: nodr/v1alpha1\nkind: Workspace\nmetadata: { name: empty }\nspec: {}\n")
+	ws := load(t, root)
+	_, unitClusters, diags := Compile(ws)
+	checkDiags(t, diags)
+	if len(unitClusters) != 0 {
+		t.Errorf("unitClusters = %v, want empty map", unitClusters)
 	}
 }

@@ -19,11 +19,13 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/centopw/nodr/internal/admission"
+	"github.com/centopw/nodr/internal/authn"
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/engine/opentofu"
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
 	"github.com/centopw/nodr/internal/planapply"
+	"github.com/centopw/nodr/internal/secrets"
 	"github.com/centopw/nodr/internal/workspace"
 	"github.com/centopw/nodr/internal/yamledit"
 )
@@ -33,11 +35,12 @@ const apiPrefix = "/api/v1"
 // Handler returns the API handler for the workspace rooted at root. The
 // workspace is loaded from disk for every request, so responses and commands
 // always operate on current intent rather than a process-local cache.
-func Handler(ctx context.Context, root string) http.Handler {
+func Handler(ctx context.Context, root string, auth *authn.Store, secretsStore *secrets.Store) http.Handler {
 	a := &server{
-		ctx:   ctx,
-		root:  root,
-		plans: make(map[string]*storedPlan),
+		ctx:     ctx,
+		root:    root,
+		plans:   make(map[string]*storedPlan),
+		secrets: secretsStore,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+apiPrefix+"/workspaces", a.listWorkspaces)
@@ -52,7 +55,16 @@ func Handler(ctx context.Context, root string) http.Handler {
 	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/commands", methodNotAllowed)
 	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", methodNotAllowed)
 	mux.HandleFunc("/api/", notFound)
-	return mux
+
+	root2 := http.NewServeMux()
+	root2.HandleFunc("POST "+apiPrefix+"/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		authn.LoginHandler(auth, apiPrefix+"/auth/login").ServeHTTP(w, r)
+	})
+	root2.HandleFunc("POST "+apiPrefix+"/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		authn.LogoutHandler(auth, apiPrefix+"/auth/logout").ServeHTTP(w, r)
+	})
+	root2.Handle("/", authn.Middleware(auth, apiPrefix+"/auth/login", apiPrefix+"/auth/logout")(mux))
+	return root2
 }
 
 type storedPlan struct {
@@ -69,6 +81,7 @@ type server struct {
 	planMu   sync.Mutex
 	plansMu  sync.Mutex
 	plans    map[string]*storedPlan
+	secrets  *secrets.Store
 }
 
 type fieldError struct {
@@ -918,7 +931,11 @@ func (a *server) planWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, plans, err := planapply.PlanUnits(r.Context(), ws, nil, planDir, nil, nil)
+	var resolve planapply.Resolver
+	if a.secrets != nil {
+		resolve = a.secrets.Resolve
+	}
+	_, plans, err := planapply.PlanUnits(r.Context(), ws, nil, planDir, nil, nil, resolve)
 	if err != nil {
 		_ = os.RemoveAll(planDir)
 		var compErr *planapply.CompileError
@@ -1038,7 +1055,11 @@ func (a *server) applyWorkspace(w http.ResponseWriter, params workspaceApplyPara
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	applied, err := planapply.Apply(ctx, stored.plans, nil, nil)
+	var resolve planapply.Resolver
+	if a.secrets != nil {
+		resolve = a.secrets.Resolve
+	}
+	applied, err := planapply.Apply(ctx, stored.plans, nil, nil, resolve)
 	unitsOutcome := make([]applyUnitOutcome, 0, len(stored.plans))
 	for i, u := range stored.plans {
 		switch {

@@ -83,12 +83,14 @@ export class ProblemError extends Error {
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
+  if (response.status === 401) {
+    window.location.href = "/login";
+    throw new Error("session expired, redirecting to /login");
+  }
   const body: unknown = await response.json();
-
   if (!response.ok) {
     throw new ProblemError(body as ProblemDetails);
   }
-
   return body as T;
 }
 

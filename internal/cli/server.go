@@ -7,16 +7,19 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	nodrapi "github.com/centopw/nodr/internal/api"
+	"github.com/centopw/nodr/internal/authn"
+	"github.com/centopw/nodr/internal/secrets"
 	"github.com/centopw/nodr/internal/webui"
 )
 
 func (a *app) serverCommand() *cobra.Command {
-	var addr string
+	var addr, kekFile string
 	cmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run the nodr API and web UI",
@@ -26,14 +29,29 @@ func (a *app) serverCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runServer(cmd.Context(), loaded.ws.Root, addr, a.stdout)
+			kek, err := secrets.LoadKEK(secrets.KEKConfig{FilePath: kekFile, EnvVar: "NODR_KEK"})
+			if err != nil {
+				return err
+			}
+			authStore, err := authn.Open(filepath.Join(loaded.ws.Root, ".nodr", "authn.db"))
+			if err != nil {
+				return err
+			}
+			defer authStore.Close()
+			secretsStore, err := secrets.Open(filepath.Join(loaded.ws.Root, ".nodr", "secrets.db"), kek)
+			if err != nil {
+				return err
+			}
+			defer secretsStore.Close()
+			return runServer(cmd.Context(), loaded.ws.Root, addr, a.stdout, authStore, secretsStore)
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP listen `address`")
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "HTTP listen `address`")
+	cmd.Flags().StringVar(&kekFile, "kek-file", "", "path to the 32-byte key encryption key file (or set NODR_KEK to a base64-encoded key)")
 	return cmd
 }
 
-func runServer(ctx context.Context, root, addr string, stdout io.Writer) error {
+func runServer(ctx context.Context, root, addr string, stdout io.Writer, auth *authn.Store, secretsStore *secrets.Store) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -41,8 +59,8 @@ func runServer(ctx context.Context, root, addr string, stdout io.Writer) error {
 	defer listener.Close()
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", nodrapi.Handler(ctx, root))
-	mux.Handle("/api", nodrapi.Handler(ctx, root))
+	mux.Handle("/api/", nodrapi.Handler(ctx, root, auth, secretsStore))
+	mux.Handle("/api", nodrapi.Handler(ctx, root, auth, secretsStore))
 	mux.Handle("/", webui.Handler())
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	serveDone := make(chan error, 1)
