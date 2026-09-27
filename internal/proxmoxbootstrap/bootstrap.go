@@ -21,9 +21,12 @@ type Result struct {
 }
 
 const (
-	bootstrapUser    = "nodr@pve"
+	// BootstrapUser is the dedicated Proxmox VE user nodr creates and
+	// authenticates as after onboarding a cluster.
+	BootstrapUser    = "nodr@pve"
 	bootstrapRole    = "NodrOperator"
-	bootstrapTokenID = "nodr"
+	// BootstrapTokenID is the API token ID nodr creates under BootstrapUser.
+	BootstrapTokenID = "nodr"
 )
 
 // Bootstrap creates the dedicated user, role and API token on the cluster
@@ -32,23 +35,23 @@ const (
 // Login or SetAPIToken); Bootstrap does not manage that credential's
 // lifetime — the caller discards it after this call returns.
 func Bootstrap(ctx context.Context, client *proxmox.Client, privileges []string) (Result, error) {
-	if err := client.CreateUser(ctx, bootstrapUser, proxmox.UserOptions{Comment: "created by nodr cluster connect"}); err != nil {
+	if err := client.CreateUser(ctx, BootstrapUser, proxmox.UserOptions{Comment: "created by nodr cluster connect"}); err != nil {
 		return Result{}, fmt.Errorf("proxmoxbootstrap: create user: %w", err)
 	}
 	if err := client.CreateRole(ctx, bootstrapRole, privileges); err != nil {
 		return Result{}, fmt.Errorf("proxmoxbootstrap: create role: %w", err)
 	}
-	if err := client.UpdateACL(ctx, "/", map[string][]string{bootstrapUser: {bootstrapRole}}); err != nil {
+	if err := client.UpdateACL(ctx, "/", map[string][]string{BootstrapUser: {bootstrapRole}}); err != nil {
 		return Result{}, fmt.Errorf("proxmoxbootstrap: update ACL: %w", err)
 	}
-	secret, err := client.CreateAPIToken(ctx, bootstrapUser, bootstrapTokenID)
+	secret, err := client.CreateAPIToken(ctx, BootstrapUser, BootstrapTokenID)
 	if err != nil {
 		return Result{}, fmt.Errorf("proxmoxbootstrap: create API token: %w", err)
 	}
 	return Result{
-		User:        bootstrapUser,
+		User:        BootstrapUser,
 		Role:        bootstrapRole,
-		TokenID:     bootstrapTokenID,
+		TokenID:     BootstrapTokenID,
 		TokenSecret: secret,
 	}, nil
 }
