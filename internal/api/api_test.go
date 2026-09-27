@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,8 @@ import (
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
+	"github.com/centopw/nodr/internal/proxmox"
+	"github.com/centopw/nodr/internal/proxmox/proxmoxtest"
 	"github.com/centopw/nodr/internal/secrets"
 	"github.com/centopw/nodr/internal/workspace"
 )
@@ -1351,4 +1354,103 @@ func TestVMLifecycleValidationErrors(t *testing.T) {
 
 	res = request(t, handler, http.MethodDelete, "/api/v1/workspaces/homelab/resources/Network/dmz", nil)
 	checkProblem(t, res, http.StatusBadRequest, "Invalid resource kind", "", "Network")
+}
+func TestClusterDiscover(t *testing.T) {
+	wantAuth := "PVEAPIToken=nodr@pve!nodr=default-test-token"
+	handlers := map[string]http.HandlerFunc{
+		"GET /api2/json/cluster/resources": func(w http.ResponseWriter, r *http.Request) {
+			if auth := r.Header.Get("Authorization"); auth != wantAuth {
+				t.Errorf("Authorization = %q, want %q", auth, wantAuth)
+			}
+			proxmoxtest.JSONResponse(w, http.StatusOK, `[
+				{"id":"qemu/1012","vmid":1012,"name":"web-01","node":"pve1","type":"qemu","status":"running","maxmem":2147483648,"maxdisk":10737418240,"maxcpu":2},
+				{"id":"qemu/1099","vmid":1099,"name":"tf-guest","node":"pve1","type":"qemu","status":"running","maxmem":1073741824,"maxdisk":5368709120,"maxcpu":1}
+			]`)
+		},
+		"GET /api2/json/nodes/pve1/qemu/1012/config": func(w http.ResponseWriter, r *http.Request) {
+			if auth := r.Header.Get("Authorization"); auth != wantAuth {
+				t.Errorf("Authorization = %q, want %q", auth, wantAuth)
+			}
+			proxmoxtest.JSONResponse(w, http.StatusOK, `{"digest":"d1","name":"web-01"}`)
+		},
+		"GET /api2/json/nodes/pve1/qemu/1099/config": func(w http.ResponseWriter, r *http.Request) {
+			if auth := r.Header.Get("Authorization"); auth != wantAuth {
+				t.Errorf("Authorization = %q, want %q", auth, wantAuth)
+			}
+			proxmoxtest.JSONResponse(w, http.StatusOK, `{"digest":"d2","name":"tf-guest","tags":"terraform"}`)
+		},
+	}
+	proxmoxSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := fmt.Sprintf("%s %s", r.Method, r.URL.Path)
+		h, ok := handlers[key]
+		if !ok {
+			t.Errorf("unexpected request: %s", key)
+			http.NotFound(w, r)
+			return
+		}
+		h(w, r)
+	}))
+	defer proxmoxSrv.Close()
+	fingerprint := proxmox.FormatFingerprint(proxmoxSrv.Certificate())
+
+	root := t.TempDir()
+	files := map[string]string{
+		"nodr.yaml": testManifest,
+		"intent/platform/pve.yaml": fmt.Sprintf(`apiVersion: nodr/v1alpha1
+kind: ProxmoxCluster
+metadata: { name: pve-main }
+spec:
+  endpoints: [%s]
+  credentialsRef: proxmox/pve-main-token
+  nodes: [pve1]
+  tls:
+    fingerprint: %s
+`, proxmoxSrv.URL, fingerprint),
+		"intent/network/dmz.yaml":    testNetwork,
+		"intent/compute/web-01.yaml": testVM,
+	}
+	for name, content := range files {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := testHandler(t, root)
+
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "cluster.discover",
+		"target":  "pve-main",
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	var guests []discoveredGuest
+	decodeResponse(t, res, &guests)
+	if len(guests) != 2 {
+		t.Fatalf("len(guests) = %d, want 2: %+v", len(guests), guests)
+	}
+	byVMID := make(map[int]discoveredGuest, len(guests))
+	for _, g := range guests {
+		byVMID[g.VMID] = g
+	}
+	if g := byVMID[1012]; g.Classified != "managed" {
+		t.Errorf("guest 1012 classified = %q, want managed", g.Classified)
+	}
+	if g := byVMID[1099]; g.Classified != "discovered (other tool?)" {
+		t.Errorf("guest 1099 classified = %q, want discovered (other tool?)", g.Classified)
+	}
+}
+
+func TestClusterDiscover_UnknownCluster(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+
+	res := request(t, handler, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
+		"command": "cluster.discover",
+		"target":  "does-not-exist",
+	})
+	checkProblem(t, res, http.StatusNotFound, "Cluster not found", "", "does-not-exist")
 }
