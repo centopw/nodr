@@ -25,6 +25,9 @@ import (
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
 	"github.com/centopw/nodr/internal/planapply"
+	"github.com/centopw/nodr/internal/proxmox"
+	"github.com/centopw/nodr/internal/proxmoxbootstrap"
+	"github.com/centopw/nodr/internal/proxmoxdiscovery"
 	"github.com/centopw/nodr/internal/secrets"
 	"github.com/centopw/nodr/internal/workspace"
 	"github.com/centopw/nodr/internal/yamledit"
@@ -400,6 +403,8 @@ func (a *server) runCommand(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		a.applyWorkspace(w, params)
+	case "cluster.discover":
+		a.clusterDiscover(w, r, request)
 	default:
 		message := fmt.Sprintf("command %q is not supported", request.Command)
 		writeProblem(w, http.StatusBadRequest, "Unknown command", message, []fieldError{{Path: "command", Message: message}})
@@ -1092,4 +1097,102 @@ func (a *server) applyWorkspace(w http.ResponseWriter, params workspaceApplyPara
 
 	a.removeStoredPlan(params.PlanID)
 	writeJSON(w, http.StatusOK, workspaceApplyResponse{Units: unitsOutcome})
+}
+
+type clusterDiscoverParams struct {
+	Cluster string `json:"cluster"`
+}
+
+type discoveredGuest struct {
+	VMID        int      `json:"vmid"`
+	Name        string   `json:"name"`
+	Node        string   `json:"node"`
+	Status      string   `json:"status"`
+	CPU         int      `json:"cpu"`
+	Memory      string   `json:"memory"`
+	Disk        string   `json:"disk"`
+	Tags        []string `json:"tags,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Classified  string   `json:"classified"`
+}
+
+func (a *server) clusterDiscover(w http.ResponseWriter, r *http.Request, request commandRequest) {
+	ws, ok := a.workspace(w, r)
+	if !ok {
+		return
+	}
+
+	var params clusterDiscoverParams
+	if len(request.Params) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(request.Params))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&params); err != nil {
+			writeProblem(w, http.StatusBadRequest, "Invalid request", fmt.Sprintf("decode params: %v", err), nil)
+			return
+		}
+	}
+	if params.Cluster == "" && request.Target != "" {
+		params.Cluster = request.Target
+	}
+	if params.Cluster == "" {
+		message := "cluster is required"
+		writeProblem(w, http.StatusBadRequest, "Invalid request", message, []fieldError{{Path: "cluster", Message: message}})
+		return
+	}
+
+	credentialsRef, ok := planapply.CredentialsRefFor(ws, params.Cluster)
+	if !ok {
+		writeProblem(w, http.StatusNotFound, "Cluster not found", fmt.Sprintf("cluster %q not found, or has no credentialsRef", params.Cluster), nil)
+		return
+	}
+	var resolve planapply.Resolver
+	if a.secrets != nil {
+		resolve = a.secrets.Resolve
+	}
+	if resolve == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "Secrets store unavailable", "no secrets store is configured", nil)
+		return
+	}
+	secret, err := resolve(r.Context(), credentialsRef)
+	if err != nil {
+		writeProblem(w, http.StatusBadGateway, "Cannot resolve credentials", err.Error(), nil)
+		return
+	}
+
+	d := ws.Find(nrm.Ref{Kind: v1alpha1.KindProxmoxCluster, Name: params.Cluster})
+	if d == nil {
+		writeProblem(w, http.StatusNotFound, "Cluster not found", fmt.Sprintf("cluster %q not found", params.Cluster), nil)
+		return
+	}
+	spec, err := v1alpha1.Decode[v1alpha1.ProxmoxClusterSpec](d)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "Invalid cluster", fmt.Sprintf("decode cluster %q: %v", params.Cluster, err), nil)
+		return
+	}
+	if len(spec.Spec.Endpoints) == 0 {
+		writeProblem(w, http.StatusInternalServerError, "Invalid cluster", fmt.Sprintf("cluster %q has no endpoints", params.Cluster), nil)
+		return
+	}
+	var httpClient *http.Client
+	if spec.Spec.TLS != nil && spec.Spec.TLS.Fingerprint != "" {
+		httpClient = proxmox.NewPinnedHTTPClient(spec.Spec.TLS.Fingerprint)
+	}
+	client := proxmox.NewClient(spec.Spec.Endpoints[0], httpClient)
+	client.SetAPIToken(proxmoxbootstrap.BootstrapUser, proxmoxbootstrap.BootstrapTokenID, string(secret))
+
+	guests, err := proxmoxdiscovery.Discover(r.Context(), client, ws, params.Cluster)
+	if err != nil {
+		writeProblem(w, http.StatusBadGateway, "Discovery failed", err.Error(), nil)
+		return
+	}
+
+	out := make([]discoveredGuest, len(guests))
+	for i, g := range guests {
+		out[i] = discoveredGuest{
+			VMID: g.VMID, Name: g.Name, Node: g.Node, Status: g.Status,
+			CPU: g.CPUs, Memory: g.Memory, Disk: g.Disk,
+			Tags: g.Tags, Description: g.Description, Classified: string(g.Classified),
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

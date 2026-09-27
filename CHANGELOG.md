@@ -32,6 +32,10 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   sign in to the dashboard and API.
 - The dashboard and API now require an authenticated session
   (`HttpOnly`/`Secure`/`SameSite=Strict` cookie) for every route.
+- `nodr cluster discover <cluster>`: lists a connected cluster's live QEMU
+  guests, classifies each as already managed by nodr or undiscovered, and
+  flags undiscovered guests whose tags or description mention another
+  infrastructure-as-code tool. Read-only; adoption is not implemented yet.
 
 ### Fixed
 
