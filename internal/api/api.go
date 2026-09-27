@@ -1165,7 +1165,11 @@ func (a *server) clusterDiscover(w http.ResponseWriter, r *http.Request, request
 		return
 	}
 	spec, err := v1alpha1.Decode[v1alpha1.ProxmoxClusterSpec](d)
-	if err != nil || len(spec.Spec.Endpoints) == 0 {
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "Invalid cluster", fmt.Sprintf("decode cluster %q: %v", params.Cluster, err), nil)
+		return
+	}
+	if len(spec.Spec.Endpoints) == 0 {
 		writeProblem(w, http.StatusInternalServerError, "Invalid cluster", fmt.Sprintf("cluster %q has no endpoints", params.Cluster), nil)
 		return
 	}
