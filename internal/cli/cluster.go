@@ -4,16 +4,21 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/term"
 
+	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
+	"github.com/centopw/nodr/internal/planapply"
 	"github.com/centopw/nodr/internal/proxmox"
 	"github.com/centopw/nodr/internal/proxmoxbootstrap"
+	"github.com/centopw/nodr/internal/proxmoxdiscovery"
 	"github.com/centopw/nodr/internal/secrets"
 )
 
@@ -23,6 +28,7 @@ func (a *app) clusterCommand() *cobra.Command {
 		Short: "Manage Proxmox cluster connections",
 	}
 	cmd.AddCommand(a.clusterConnectCommand())
+	cmd.AddCommand(a.clusterDiscoverCommand())
 	return cmd
 }
 
@@ -174,4 +180,76 @@ func (a *app) clusterConnect(ctx context.Context) error {
 	}
 	fmt.Fprintf(a.stdout, "connected cluster %q; wrote %s\n", clusterName, intentPath)
 	return nil
+}
+
+func (a *app) clusterDiscoverCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "discover <cluster>",
+		Short: "List live QEMU guests on a connected Proxmox VE cluster and classify them against workspace intent",
+		Long: `Discover connects to a cluster nodr already manages (docs/design/06-proxmox.md
+§6.3) using its stored API token, lists every live QEMU guest, and reports
+whether nodr already manages it, it looks undiscovered, or its tags or
+description mention another infrastructure-as-code tool. Discover makes no
+changes: it neither writes intent nor touches the cluster.`,
+		Args: exactlyOneArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.clusterDiscover(cmd.Context(), args[0])
+		},
+	}
+	return cmd
+}
+
+func (a *app) clusterDiscover(ctx context.Context, clusterName string) error {
+	loaded, err := a.mustLoad()
+	if err != nil {
+		return err
+	}
+
+	credentialsRef, ok := planapply.CredentialsRefFor(loaded.ws, clusterName)
+	if !ok {
+		return fmt.Errorf("nodr: cluster %q not found, or has no credentialsRef; run 'nodr cluster connect' first", clusterName)
+	}
+	resolve, err := a.secretsResolve(loaded.ws.Root)
+	if err != nil {
+		return err
+	}
+	if resolve == nil {
+		return fmt.Errorf("nodr: no secrets store found at %s; run 'nodr cluster connect' first", filepath.Join(loaded.ws.Root, ".nodr", "secrets.db"))
+	}
+	secret, err := resolve(ctx, credentialsRef)
+	if err != nil {
+		return fmt.Errorf("nodr: resolve %s: %w", credentialsRef, err)
+	}
+
+	d := loaded.ws.Find(nrm.Ref{Kind: v1alpha1.KindProxmoxCluster, Name: clusterName})
+	if d == nil {
+		return fmt.Errorf("nodr: cluster %q not found", clusterName)
+	}
+	spec, err := v1alpha1.Decode[v1alpha1.ProxmoxClusterSpec](d)
+	if err != nil {
+		return fmt.Errorf("nodr: decode cluster %q: %w", clusterName, err)
+	}
+	if len(spec.Spec.Endpoints) == 0 {
+		return fmt.Errorf("nodr: cluster %q has no endpoints", clusterName)
+	}
+	var httpClient *http.Client
+	if spec.Spec.TLS != nil && spec.Spec.TLS.Fingerprint != "" {
+		httpClient = proxmox.NewPinnedHTTPClient(spec.Spec.TLS.Fingerprint)
+	}
+	client := proxmox.NewClient(spec.Spec.Endpoints[0], httpClient)
+	client.SetAPIToken(proxmoxbootstrap.BootstrapUser, proxmoxbootstrap.BootstrapTokenID, string(secret))
+
+	guests, err := proxmoxdiscovery.Discover(ctx, client, loaded.ws, clusterName)
+	if err != nil {
+		return err
+	}
+
+	rows := [][]string{{"VMID", "NAME", "NODE", "STATUS", "CPU", "MEMORY", "NODR"}}
+	for _, g := range guests {
+		rows = append(rows, []string{
+			strconv.Itoa(g.VMID), g.Name, g.Node, g.Status,
+			strconv.Itoa(g.CPUs), g.Memory, string(g.Classified),
+		})
+	}
+	return writeTable(a.stdout, 2, rows)
 }
