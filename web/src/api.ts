@@ -33,6 +33,41 @@ export interface VirtualMachine {
   powerState: string;
 }
 
+export interface ProxmoxCluster {
+	kind: "ProxmoxCluster";
+	name: string;
+	endpoints: string[];
+	nodes: string[];
+}
+
+export interface ClusterConnectParams {
+	cluster: string;
+	endpoint: string;
+	node: string;
+	adminUsername: string;
+	adminPassword: string;
+}
+
+export interface ClusterConnectProbeResult {
+	fingerprint: string;
+}
+
+export interface UpdateProxmoxClusterParams {
+	endpoints: string[];
+	nodes: string[];
+}
+
+export interface ClusterConnectResult {
+	cluster: string;
+	endpoint: string;
+	node: string;
+	fingerprint: string;
+	credentialsRef: string;
+	tokenId: string;
+	intentPath: string;
+}
+
+
 export type VMSize = "S" | "M" | "L";
 
 export interface CreateVMParams {
@@ -169,6 +204,49 @@ export function deleteVM(
       body: JSON.stringify({ command: "vm.delete", params: { name } }),
     },
   );
+}
+
+export function clusterConnectProbe(
+	workspace: string,
+	params: ClusterConnectParams,
+): Promise<ClusterConnectProbeResult> {
+	return fetchJSON(
+		`${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ command: "cluster.connect.probe", params }),
+		},
+	);
+}
+
+export function clusterConnect(
+	workspace: string,
+	params: ClusterConnectParams & { fingerprint: string },
+): Promise<ClusterConnectResult> {
+	return fetchJSON(
+		`${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ command: "cluster.connect", params }),
+		},
+	);
+}
+
+export function updateProxmoxCluster(
+	workspace: string,
+	name: string,
+	params: UpdateProxmoxClusterParams,
+): Promise<ProxmoxCluster> {
+	return fetchJSON(
+		`${API_BASE}/workspaces/${encodeURIComponent(workspace)}/resources/ProxmoxCluster/${encodeURIComponent(name)}`,
+		{
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(params),
+		},
+	);
 }
 
 export type ChangeAction =

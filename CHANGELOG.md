@@ -8,6 +8,12 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 ## [Unreleased]
 
 ### Added
+- The web UI now opens on an inventory-first Infrastructure view, with a
+  persisted collapsible navigation rail, a workspace context bar, and
+  state-derived cluster and virtual-machine actions: Overview, Infrastructure
+  and Changes navigation with resource totals, and direct actions for
+  creating virtual machines, connecting clusters and reviewing planned
+  changes.
 
 - `nodr server` serves the web UI and a REST API for listing workspaces and
   virtual machines and creating admitted virtual-machine intent.
@@ -36,8 +42,15 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   guests, classifies each as already managed by nodr or undiscovered, and
   flags undiscovered guests whose tags or description mention another
   infrastructure-as-code tool. Read-only; adoption is not implemented yet.
+- `nodr cluster connect`: a two-step Proxmox certificate confirmation wizard,
+  and editable Proxmox cluster endpoint and node lists.
 
 ### Fixed
+- The collapsed navigation rail no longer overflows its fixed width: the
+  Infrastructure item's virtual-machine and cluster count badges are now
+  visually hidden (and still announced to assistive technology) when the
+  sidebar is collapsed, instead of rendering at full size inside the
+  narrowed rail.
 
 - OpenTofu output and error messages are now scrubbed of any resolved
   Proxmox API token before reaching logs or API responses.

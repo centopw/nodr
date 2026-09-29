@@ -17,12 +17,18 @@ export interface VMListProps {
   virtualMachines: VirtualMachine[];
   workspace?: string;
   onRefresh?: () => void | Promise<void>;
+  hasCluster: boolean;
+  onCreateVM: () => void;
+  onConnectCluster: () => void;
 }
 
 export default function VMList({
   virtualMachines,
   workspace,
   onRefresh,
+  hasCluster,
+  onCreateVM,
+  onConnectCluster,
 }: VMListProps) {
   const [loadingMap, setLoadingMap] = useState<
     Record<string, "start" | "stop" | "delete">
@@ -157,12 +163,10 @@ export default function VMList({
   ) : null;
 
   if (virtualMachines.length === 0) {
-    return (
-      <>
-        {errorBanner}
-        <p className="empty-state">No virtual machines found.</p>
-      </>
-    );
+    return <>
+      {errorBanner}
+      <div className="empty-state"><p>No virtual machines found.</p><Button onClick={hasCluster ? onCreateVM : onConnectCluster}>{hasCluster ? "Create VM" : "Connect cluster"}</Button></div>
+    </>;
   }
 
   return (
@@ -172,13 +176,10 @@ export default function VMList({
         <table>
           <thead>
             <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Status</th>
-              <th scope="col">Cluster</th>
-              <th scope="col">Node</th>
-              <th scope="col">Guest ID</th>
-              <th scope="col">CPU</th>
-              <th scope="col">Memory</th>
+              <th scope="col">Virtual machine</th>
+              <th scope="col">State</th>
+              <th scope="col">Placement</th>
+              <th scope="col">Compute</th>
               <th scope="col">Address</th>
               <th scope="col">Actions</th>
             </tr>
@@ -192,14 +193,14 @@ export default function VMList({
 
               return (
                 <tr key={`${vm.environment}/${vm.name}`}>
-                  <td>{vm.name}</td>
+                  <td><strong>{vm.name}</strong></td>
                   <td><StatusBadge powerState={vm.powerState} /></td>
-                  <td>{vm.cluster}</td>
-                  <td>{vm.node === "" ? "—" : vm.node}</td>
-                  <td>{vm.vmid === 0 ? "—" : vm.vmid}</td>
-                  <td>{vm.cpu}</td>
-                  <td>{vm.memory}</td>
-                  <td>{vm.addresses.length > 0 ? vm.addresses.join(", ") : "—"}</td>
+                  <td><strong>{vm.cluster}</strong><br /><span className="table-detail">{vm.node || "Unplaced"}{vm.vmid ? ` · ${vm.vmid}` : ""}</span></td>
+                  <td>{vm.cpu} vCPU<br /><span className="table-detail">{vm.memory}</span></td>
+                  <td>{vm.addresses.length > 0 ? vm.addresses.map((address, index) => {
+                    try { const url = new URL(address); return url.protocol === "http:" || url.protocol === "https:" ? <span key={address}>{index > 0 ? ", " : ""}<a href={address} target="_blank" rel="noreferrer">{address}</a></span> : <span key={address}>{index > 0 ? ", " : ""}{address}</span>; }
+                    catch { return <span key={address}>{index > 0 ? ", " : ""}{address}</span>; }
+                  }) : "—"}</td>
                   <td>
                     <div className="actions-cell">
                       {isRunning ? (
