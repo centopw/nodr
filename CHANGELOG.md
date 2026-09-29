@@ -42,6 +42,12 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   guests, classifies each as already managed by nodr or undiscovered, and
   flags undiscovered guests whose tags or description mention another
   infrastructure-as-code tool. Read-only; adoption is not implemented yet.
+- The dashboard's Clusters table now has a "Discover" action that calls
+  `cluster.discover` and shows the live QEMU guest list in a read-only
+  modal, with each guest's VMID, node, power state and classification
+  (managed by nodr, undiscovered, or tagged by another tool). This makes
+  `nodr cluster discover` visible in the web UI without adding guest
+  adoption, which remains unimplemented.
 - `nodr cluster connect`: a two-step Proxmox certificate confirmation wizard,
   and editable Proxmox cluster endpoint and node lists.
 

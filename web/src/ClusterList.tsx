@@ -1,13 +1,16 @@
 import { useState, type FormEvent } from "react";
 import {
+  clusterDiscover,
   ProblemError,
   updateProxmoxCluster,
+  type DiscoveredGuest,
   type ProxmoxCluster,
   type ProblemDetails,
 } from "./api";
 import Banner from "./components/Banner";
 import Button from "./components/Button";
 import Modal from "./components/Modal";
+import StatusBadge from "./components/StatusBadge";
 
 interface ClusterListProps {
   clusters: ProxmoxCluster[];
@@ -32,6 +35,10 @@ export default function ClusterList({
   const [nodes, setNodes] = useState("");
   const [saving, setSaving] = useState(false);
   const [problem, setProblem] = useState<ProblemDetails | null>(null);
+  const [discoverCluster, setDiscoverCluster] = useState<ProxmoxCluster | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverResults, setDiscoverResults] = useState<DiscoveredGuest[] | null>(null);
+  const [discoverProblem, setDiscoverProblem] = useState<ProblemDetails | null>(null);
 
   function beginEdit(cluster: ProxmoxCluster) {
     setProblem(null);
@@ -63,6 +70,43 @@ export default function ClusterList({
     }
   }
 
+  async function handleDiscover(cluster: ProxmoxCluster) {
+    setDiscoverProblem(null);
+    setDiscoverResults(null);
+    setDiscoverCluster(cluster);
+    setDiscovering(true);
+    try {
+      const guests = await clusterDiscover(workspace, cluster.name);
+      setDiscoverResults(guests);
+    } catch (error) {
+      setDiscoverProblem(
+        error instanceof ProblemError
+          ? error.problem
+          : { type: "about:blank", title: "Error", status: 500, detail: error instanceof Error ? error.message : String(error) },
+      );
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  function closeDiscover() {
+    setDiscoverCluster(null);
+    setDiscoverResults(null);
+    setDiscoverProblem(null);
+  }
+
+  function classificationLabel(classified: string): string {
+    if (classified === "managed") return "Managed by nodr";
+    if (classified === "discovered (other tool?)") return "Tagged by another tool";
+    return "Undiscovered";
+  }
+
+  function classificationModifier(classified: string): string {
+    if (classified === "managed") return "status-managed";
+    if (classified === "discovered (other tool?)") return "status-other-tool";
+    return "status-undiscovered";
+  }
+
   return (
     <section aria-labelledby="cluster-list-heading">
       <div className="section-heading">
@@ -86,7 +130,7 @@ export default function ClusterList({
                     catch { return <span key={endpoint}>{index > 0 ? ", " : ""}{endpoint}</span>; }
                   })}</td>
                   <td>{cluster.nodes.join(", ") || "—"}</td>
-                  <td><Button variant="secondary" size="small" onClick={() => beginEdit(cluster)}>Edit</Button></td>
+                  <td className="actions-cell"><Button variant="secondary" size="small" onClick={() => beginEdit(cluster)}>Edit</Button><Button variant="secondary" size="small" onClick={() => void handleDiscover(cluster)}>Discover</Button></td>
                 </tr>
               ))}
             </tbody>
@@ -109,6 +153,39 @@ export default function ClusterList({
           </div>
           <div className="modal-actions"><Button variant="secondary" onClick={() => setEditing(null)} disabled={saving}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save"}</Button></div>
         </form>
+      </Modal>
+      <Modal open={discoverCluster !== null} onClose={closeDiscover} closeDisabled={discovering} titleId="discover-guests-heading">
+        <h3 id="discover-guests-heading">Guests on {discoverCluster?.name}</h3>
+        <p>
+          Read-only: live QEMU guests classified against this workspace&rsquo;s
+          intent. Undiscovered guests are not added automatically &mdash;
+          write a <code>VirtualMachine</code> document for any you want nodr
+          to manage.
+        </p>
+        {discoverProblem ? <Banner variant="error">{discoverProblem.detail}</Banner> : null}
+        {discovering ? <p className="status" role="status">Discovering…</p> : null}
+        {!discovering && discoverResults && discoverResults.length === 0 ? (
+          <p className="empty-state">No live QEMU guests were found on this cluster.</p>
+        ) : null}
+        {!discovering && discoverResults && discoverResults.length > 0 ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th scope="col">VMID</th><th scope="col">Name</th><th scope="col">Node</th><th scope="col">Status</th><th scope="col">Classification</th></tr></thead>
+              <tbody>
+                {discoverResults.map((guest) => (
+                  <tr key={guest.vmid}>
+                    <td>{guest.vmid}</td>
+                    <td>{guest.name}</td>
+                    <td>{guest.node}</td>
+                    <td><StatusBadge powerState={guest.status} /></td>
+                    <td><span className={`status-badge ${classificationModifier(guest.classified)}`}>{classificationLabel(guest.classified)}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        <div className="modal-actions"><Button variant="secondary" onClick={closeDiscover} disabled={discovering}>Close</Button></div>
       </Modal>
     </section>
   );

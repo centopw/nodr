@@ -249,6 +249,41 @@ export function updateProxmoxCluster(
 	);
 }
 
+export type DiscoveredGuestStatus =
+  | "managed"
+  | "discovered"
+  | "discovered (other tool?)";
+
+export interface DiscoveredGuest {
+  vmid: number;
+  name: string;
+  node: string;
+  status: string;
+  cpu: number;
+  memory: string;
+  disk: string;
+  tags?: string[];
+  description?: string;
+  classified: DiscoveredGuestStatus;
+}
+
+export function clusterDiscover(
+  workspace: string,
+  cluster: string,
+): Promise<DiscoveredGuest[]> {
+  return fetchJSON(
+    `${API_BASE}/workspaces/${encodeURIComponent(workspace)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        command: "cluster.discover",
+        params: { cluster },
+      }),
+    },
+  );
+}
+
 export type ChangeAction =
   | "create"
   | "update"
