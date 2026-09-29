@@ -81,7 +81,10 @@ export default function ClusterList({
               {clusters.map((cluster) => (
                 <tr key={cluster.name}>
                   <td>{cluster.name}</td>
-                  <td>{cluster.endpoints.join(", ")}</td>
+                  <td>{cluster.endpoints.map((endpoint, index) => {
+                    try { const url = new URL(endpoint); return url.protocol === "http:" || url.protocol === "https:" ? <span key={endpoint}>{index > 0 ? ", " : ""}<a href={endpoint} target="_blank" rel="noreferrer">{endpoint}</a></span> : <span key={endpoint}>{index > 0 ? ", " : ""}{endpoint}</span>; }
+                    catch { return <span key={endpoint}>{index > 0 ? ", " : ""}{endpoint}</span>; }
+                  })}</td>
                   <td>{cluster.nodes.join(", ") || "—"}</td>
                   <td><Button variant="secondary" size="small" onClick={() => beginEdit(cluster)}>Edit</Button></td>
                 </tr>

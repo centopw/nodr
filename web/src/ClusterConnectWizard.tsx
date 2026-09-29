@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   clusterConnect,
   clusterConnectProbe,
@@ -11,6 +11,8 @@ import Button from "./components/Button";
 
 interface ClusterConnectWizardProps {
   workspace: string;
+  hasClusters: boolean;
+  expandSignal: number;
   onConnected: (summary: string) => void | Promise<void>;
 }
 
@@ -26,13 +28,19 @@ const initialValues: ClusterConnectParams = {
 
 export default function ClusterConnectWizard({
   workspace,
+  hasClusters,
+  expandSignal,
   onConnected,
 }: ClusterConnectWizardProps) {
+  const [expanded, setExpanded] = useState(!hasClusters);
   const [values, setValues] = useState<ClusterConnectParams>(initialValues);
   const [step, setStep] = useState<Step>("details");
   const [fingerprint, setFingerprint] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [problem, setProblem] = useState<ProblemDetails | null>(null);
+
+  useEffect(() => { setExpanded(!hasClusters); }, [hasClusters]);
+  useEffect(() => { if (expandSignal > 0) setExpanded(true); }, [expandSignal]);
 
   function update(field: keyof ClusterConnectParams, value: string) {
     setValues((current) => ({ ...current, [field]: value }));
@@ -74,10 +82,18 @@ export default function ClusterConnectWizard({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Proxmox VE</p>
-          <h2 id="connect-cluster-heading">Connect cluster</h2>
+          <h2 id="connect-cluster-heading">{hasClusters ? "Add another cluster" : "Connect cluster"}</h2>
         </div>
+        {expanded && hasClusters ? <Button variant="secondary" size="small" onClick={() => setExpanded(false)}>Collapse</Button> : null}
       </div>
-      {problem ? <Banner variant="error">{problem.detail}</Banner> : null}
+      {!expanded ? (
+        <div className="empty-state">
+          <p>Connect another Proxmox VE cluster to this workspace.</p>
+          <Button variant="secondary" onClick={() => setExpanded(true)}>Add cluster</Button>
+        </div>
+      ) : (
+        <>
+          {problem ? <Banner variant="error">{problem.detail}</Banner> : null}
       {step === "details" ? (
         <form onSubmit={handleProbe} autoComplete="off">
           <div className="form-grid">
@@ -98,6 +114,8 @@ export default function ClusterConnectWizard({
             <Button onClick={() => void handleConfirm()} disabled={submitting}>{submitting ? "Connecting…" : "Trust and connect"}</Button>
           </div>
         </div>
+      )}
+        </>
       )}
     </section>
   );

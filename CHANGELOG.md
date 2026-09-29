@@ -52,6 +52,21 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   sidebar is collapsed, instead of rendering at full size inside the
   narrowed rail.
 
+- Cluster endpoints are now rendered as clickable links when they are
+  syntactically valid `http`/`https` URLs, matching the existing behavior
+  for virtual-machine addresses, instead of always rendering as inert text.
+
+- Row-action buttons (Stop, Delete, Edit) now reach the 44px mobile touch
+  target on narrow viewports; a more specific compact-button style was
+  silently overriding the existing mobile breakpoint rule. Desktop sizing
+  is unchanged.
+
+- The cluster-connect form no longer renders fully expanded and permanently
+  visible below an existing cluster's summary. It now collapses to an "Add
+  another cluster" prompt once a cluster is connected, and expands via the
+  existing contextual "Connect cluster" actions, which still scroll to and
+  focus it.
+
 - OpenTofu output and error messages are now scrubbed of any resolved
   Proxmox API token before reaching logs or API responses.
 
