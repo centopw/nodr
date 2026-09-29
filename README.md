@@ -79,12 +79,13 @@ $ bin/nodr describe -w examples/homelab vm/web-01 --ownership
 ### Connect and inspect a cluster
 
 `cluster connect` needs the same durable base64-encoded 32-byte key in
-`NODR_KEK` that later CLI commands use to decrypt the stored API token. Export
-it from your secure secrets manager before connecting, discovering, planning,
-or applying a workspace with connected-cluster credentials:
+`NODR_KEK` that later CLI commands use to decrypt the stored API token. Create
+and retain the key using the [dashboard key setup](#1-protect-local-credentials),
+then export it before connecting, discovering, planning, or applying a
+workspace with connected-cluster credentials:
 
 ```console
-$ export NODR_KEK='base64-encoded-32-byte-key'
+$ export NODR_KEK="$(base64 < path/to/workspace/.nodr/kek | tr -d '\n')"
 $ bin/nodr cluster connect -w path/to/workspace
 ```
 
@@ -136,44 +137,52 @@ it better fits your Git or automation workflow.
 ### 1. Protect local credentials
 
 The dashboard stores encrypted cluster credentials in
-`<workspace>/.nodr/secrets.db`. Give nodr one durable 32-byte key-encryption
-key (KEK): either place it in a protected file managed by your normal secrets
-process, or securely persist its base64 form as `NODR_KEK`. Do not commit the
-key or `.nodr/` directory.
+`<workspace>/.nodr/secrets.db`. Create one durable 32-byte key-encryption key
+(KEK), retain it for as long as that encrypted state exists, and never commit
+the key or `.nodr/` directory. This one-time setup creates a raw 32-byte key
+with owner-only permissions:
 
 ```console
-$ bin/nodr server -w path/to/workspace --kek-file /secure/path/nodr.kek
+$ install -d -m 700 path/to/workspace/.nodr
+$ umask 077; openssl rand 32 > path/to/workspace/.nodr/kek
 ```
 
-Alternatively, set `NODR_KEK` to a base64-encoded 32-byte key before running
-any command that needs the secrets store:
+Start the dashboard with that same key file. `--kek-file` is a `server` flag:
 
 ```console
-$ export NODR_KEK='base64-encoded-32-byte-key'
-$ bin/nodr server -w path/to/workspace
+$ bin/nodr server -w path/to/workspace --kek-file path/to/workspace/.nodr/kek
+```
+
+CLI commands that open encrypted cluster credentials require the same key as
+base64-encoded 32 bytes in `NODR_KEK`; the server's `--kek-file` setting is not
+shared with other processes:
+
+```console
+$ export NODR_KEK="$(base64 < path/to/workspace/.nodr/kek | tr -d '\n')"
 ```
 
 ### 2. Create the local administrator
 
-Create or replace the dashboard's single local administrator. With
-`--password-stdin`, provide the username followed by the password as two lines:
+Create or replace the dashboard's single local administrator. This command
+writes the local authentication database; it does not open the encrypted
+secrets store. Read the credentials instead of placing a real password in
+shell history:
 
 ```console
-$ printf 'admin\nchoose-a-strong-password\n' | \
+$ read -r -p 'Username: ' NODR_ADMIN_USERNAME
+$ read -r -s -p 'Password: ' NODR_ADMIN_PASSWORD; printf '\n'
+$ printf '%s\n%s\n' "$NODR_ADMIN_USERNAME" "$NODR_ADMIN_PASSWORD" | \
     bin/nodr auth create-admin --password-stdin -w path/to/workspace
+$ unset NODR_ADMIN_USERNAME NODR_ADMIN_PASSWORD
 ```
-
-This command writes the local authentication database; it does not open the
-encrypted secrets store. Use a password manager or another secure input
-mechanism instead of putting a real password in shell history.
 
 ### 3. Run nodr and sign in
 
-Start the server, then open the shown address in a browser. Its default bind
-address is loopback-only, `127.0.0.1:8080`:
+Start the server, then open `http://127.0.0.1:8080` in a browser. Its default
+bind address is loopback-only:
 
 ```console
-$ bin/nodr server -w path/to/workspace --kek-file /secure/path/nodr.kek
+$ bin/nodr server -w path/to/workspace --kek-file path/to/workspace/.nodr/kek
 ```
 
 Sign in with the local administrator. From **Infrastructure**, create VMs or
