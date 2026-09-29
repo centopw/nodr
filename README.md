@@ -2,68 +2,18 @@
   <img src="docs/assets/banner.png" alt="nodr: Infrastructure, your way" width="100%">
 </p>
 
-nodr manages self-hosted infrastructure through intent written in YAML, which
-it compiles into standard OpenTofu code in the same Git repository. It is for
-homelabs and small and medium-sized businesses that run Proxmox VE. Release
-0.1.0 is a command-line tool for Proxmox VE virtual machines; a web GUI that
-works on the same intent and code is planned.
+nodr manages Proxmox VE infrastructure from YAML intent in a Git-backed
+workspace. It compiles that intent into ordinary OpenTofu code; use the CLI,
+the dashboard, or both against the same workspace.
 
-## Features
-
-What works today, in release 0.1.0:
-
-- **Intent model and validation.** `nodr/v1alpha1` documents describe
-  workspaces, Proxmox clusters, networks, templates, SSH keys and virtual
-  machines. `nodr validate` checks their schemas, semantic rules and
-  references, finds guest IDs, IPv4 addresses and MAC addresses that are used
-  more than once, and reports each problem with its file, line and field.
-- **Admission.** `nodr admit` allocates the UID, guest ID, node and IPv4
-  addresses of virtual machines and writes them into the intent files, keeping
-  comments and formatting. `--dry-run` previews the values.
-- **Proxmox VM lens.** The lens maps a `VirtualMachine` to a
-  `proxmox_virtual_environment_vm` resource of the `bpg/proxmox` provider and
-  back, and property-based tests check the lens laws. `nodr render` prints the
-  code that it generates.
-- **Structure-preserving updates.** nodr updates the blocks that it manages in
-  place and changes only the bytes it has to, so comments, hand formatting,
-  expressions, extra attributes and your own code stay as they are.
-- **Field ownership.** `nodr describe --ownership` lists the owner of every
-  field of a virtual machine, as text or JSON.
-- **Plan and apply with OpenTofu.** `nodr plan` compiles intent into the state
-  units below `terraform/`, writes the files that change and plans each state
-  unit. `nodr apply` applies exactly the saved plans after confirmation, and
-  replaces or destroys resources only with `--allow-destroy`.
-
-## Status and roadmap
-
-nodr is at an early stage, and versions stay at 0.x until the API is stable.
-Release 0.1.0 delivers part of the first milestone, M0 Foundations. The
-[delivery roadmap](docs/design/13-operations-and-delivery.md#138-delivery-roadmap)
-plans the rest:
-
-- **M0 Foundations**: the web GUI with Simple Mode forms and an Advanced Mode
-  editor, sync of code edits for VMs, change sets and a state service.
-- **M1 Clusters and automation**: multi-node clusters, high availability,
-  discovery and adoption, drift detection, and a scheduler for backup, update
-  and snapshot policies.
-- **M2 Networking**: OpenWrt with connectivity-safe apply, IPAM, DHCP, DNS,
-  firewall policy and WireGuard.
-- **M3 Containers**: Docker hosts, Compose projects, K3s clusters, applications
-  and a catalog.
-- **M4 Interoperability**: an Ansible engine, importers, export and a plugin
-  SDK.
-- **M5 SME readiness (1.0)**: a highly available topology, OIDC, RBAC with
-  approvals, audit export and remote runners.
-
-## Installation
+## Install
 
 ### From a release
 
 The [releases page](../../releases) has archives for Linux, macOS and Windows
-on amd64 and arm64, named `nodr_<version>_<os>_<arch>`, with `darwin` for
-macOS. The archives for Windows are `.zip` files, the others `.tar.gz` files.
-Download the archive for your platform and `checksums.txt`, verify the archive
-and extract `nodr`:
+on amd64 and arm64, named `nodr_<version>_<os>_<arch>` (`darwin` for macOS).
+Windows archives are `.zip`; the others are `.tar.gz`. Download the archive for
+your platform and `checksums.txt`, verify it, then extract `nodr`:
 
 ```console
 $ sha256sum -c checksums.txt --ignore-missing
@@ -72,28 +22,44 @@ $ tar -xzf nodr_0.1.0_linux_amd64.tar.gz nodr
 $ ./nodr version
 ```
 
-On macOS, use `shasum -a 256` instead of `sha256sum`. For releases published
-while the repository is public,
-`gh attestation verify <archive> --repo <owner>/<repo>` also checks the build
-provenance.
+On macOS, use `shasum -a 256` instead of `sha256sum`.
 
 ### From source
 
-Building from source needs Go 1.24 or later. Clone the repository, and in its
-root directory run:
+Building needs Go 1.24 or later:
 
 ```console
 $ make build
 $ bin/nodr version
 ```
 
-## Quick start
+The examples below use `bin/nodr`. Substitute `./nodr` when using a release
+archive. Every command accepts `-w <workspace>`; without it, nodr finds the
+closest directory containing `nodr.yaml`.
 
-The [homelab example](examples/homelab/README.md) is a workspace with a
-three-node Proxmox VE cluster, three networks, a cloud-image template, an SSH
-key and two virtual machines, together with their OpenTofu code. Run these
-commands from the root of the repository, with `bin/nodr` from
-[a source build](#from-source); with a release archive, use its `nodr` instead.
+## Start with a workspace
+
+A workspace is a Git repository containing a `nodr.yaml` manifest, YAML intent
+below `intent/`, and generated OpenTofu code below `terraform/`. Start by
+copying or adapting a workspace that matches your infrastructure. The
+[homelab example](examples/homelab/README.md) provides a complete, safe-to-read
+reference layout:
+
+```text
+workspace/
+├── nodr.yaml
+├── intent/
+└── terraform/
+```
+
+The example has placeholder endpoints, image checksums, and SSH keys. Do not
+plan or apply it against a real cluster until those values describe your own
+infrastructure.
+
+## Use the CLI
+
+Use this workflow to inspect and prepare intent before making infrastructure
+changes:
 
 ```console
 $ bin/nodr validate -w examples/homelab
@@ -103,31 +69,47 @@ $ bin/nodr render -w examples/homelab vm/web-01
 $ bin/nodr describe -w examples/homelab vm/web-01 --ownership
 ```
 
-None of these commands changes a file or contacts a cluster:
+- `validate` checks the manifest, schemas, semantic rules, and references.
+- `admit --dry-run` previews allocated values such as guest IDs and addresses
+  without writing files. Omit `--dry-run` to write the allocation into intent.
+- `render` prints the OpenTofu block generated for a resource.
+- `describe --ownership` shows which fields are synced from intent,
+  code-owned, or extensions that nodr preserves.
 
-- `validate` checks `nodr.yaml` and every intent document below `intent/`:
-  schemas, semantic rules and references between resources.
-- `admit --dry-run` prints each value that admission would allocate, such as a
-  guest ID or an IPv4 address, without writing it. Both virtual machines in the
-  example are admitted already, so it prints nothing.
-- `render` prints the OpenTofu code that nodr generates from the intent of
-  `web-01`.
-- `describe --ownership` shows where `web-01` is defined and managed, and the
-  owner of each field. Its managed block in `vms.tf` differs from the rendered
-  code in two places: `cores = var.web_cores` is code-owned, and the `smbios`
-  block is an extension.
+### Connect and inspect a cluster
+
+`cluster connect` needs the same durable base64-encoded 32-byte key in
+`NODR_KEK` that later CLI commands use to decrypt the stored API token. Export
+it from your secure secrets manager before connecting, discovering, planning,
+or applying a workspace with connected-cluster credentials:
+
+```console
+$ export NODR_KEK='base64-encoded-32-byte-key'
+$ bin/nodr cluster connect -w path/to/workspace
+```
+
+`cluster connect` interactively bootstraps least-privilege Proxmox credentials,
+pins the server certificate fingerprint, stores the API token locally, and
+writes a `ProxmoxCluster` intent document.
+
+After connecting, inspect a cluster's live QEMU guests without changing either
+the cluster or intent:
+
+```console
+$ bin/nodr cluster discover pve-main -w path/to/workspace
+```
+
+`discover` reports guests already managed by nodr, undiscovered guests, and
+guests whose tags or description mention another infrastructure-as-code tool.
+It is read-only; adopting discovered guests is not implemented.
 
 ### Plan and apply
 
-`nodr plan` and `nodr apply` need:
-
-- [OpenTofu](https://opentofu.org/) 1.8 or later. nodr runs the program that
-  `NODR_TOFU` names, or else `tofu` on `PATH`.
-- Credentials for the Proxmox VE API. OpenTofu inherits the environment of
-  nodr, so the `bpg/proxmox` provider reads them from variables such as
-  `PROXMOX_VE_API_TOKEN`.
-- A workspace for your own cluster. The cluster endpoints, the image checksum
-  and the SSH key in the example are placeholders.
+Plan and apply require [OpenTofu](https://opentofu.org/) 1.8 or later. nodr runs
+`NODR_TOFU` when set, otherwise `tofu` from `PATH`. For a connected cluster,
+export `NODR_KEK` so the CLI can decrypt its stored credentials. For an
+existing workspace that does not use `credentialsRef`, provide the provider
+credentials through the environment, for example:
 
 ```console
 $ export PROXMOX_VE_API_TOKEN='user@pve!token=secret'
@@ -135,77 +117,125 @@ $ bin/nodr plan -w path/to/workspace
 $ bin/nodr apply -w path/to/workspace
 ```
 
-`plan` writes the engine code that changes and prints what each state unit
-would add, change, replace and destroy. `apply` plans the same way, asks you to
-confirm with `yes`, and applies exactly the saved plans. It refuses plans that
-replace or destroy resources unless you pass `--allow-destroy`, even with
-`--auto-approve`. `--unit` limits either command to the state units it names,
-such as `--unit terraform/pve-main-compute`.
+`plan` updates generated engine code and prints the changes for each state
+unit. `apply` creates fresh saved plans, asks for `yes`, then applies those
+plans. Replacement and destruction require `--allow-destroy`, including with
+`--auto-approve`. Use `--unit terraform/pve-main-compute` to limit either
+command to one or more state units.
 
-State units without a `backend.tf` keep their OpenTofu state in local files
-next to the code; keep those `*.tfstate` files out of Git.
+State units without `backend.tf` retain OpenTofu state locally next to the
+code. Keep `*.tfstate` files out of Git.
+
+## Use the dashboard
+
+The dashboard and CLI operate on the same intent, plans, and cluster
+connections. Use the dashboard for inventory, VM creation, cluster connection,
+discovery, change review, apply, and desired VM power actions; use the CLI when
+it better fits your Git or automation workflow.
+
+### 1. Protect local credentials
+
+The dashboard stores encrypted cluster credentials in
+`<workspace>/.nodr/secrets.db`. Give nodr one durable 32-byte key-encryption
+key (KEK): either place it in a protected file managed by your normal secrets
+process, or securely persist its base64 form as `NODR_KEK`. Do not commit the
+key or `.nodr/` directory.
+
+```console
+$ bin/nodr server -w path/to/workspace --kek-file /secure/path/nodr.kek
+```
+
+Alternatively, set `NODR_KEK` to a base64-encoded 32-byte key before running
+any command that needs the secrets store:
+
+```console
+$ export NODR_KEK='base64-encoded-32-byte-key'
+$ bin/nodr server -w path/to/workspace
+```
+
+### 2. Create the local administrator
+
+Create or replace the dashboard's single local administrator. With
+`--password-stdin`, provide the username followed by the password as two lines:
+
+```console
+$ printf 'admin\nchoose-a-strong-password\n' | \
+    bin/nodr auth create-admin --password-stdin -w path/to/workspace
+```
+
+This command writes the local authentication database; it does not open the
+encrypted secrets store. Use a password manager or another secure input
+mechanism instead of putting a real password in shell history.
+
+### 3. Run nodr and sign in
+
+Start the server, then open the shown address in a browser. Its default bind
+address is loopback-only, `127.0.0.1:8080`:
+
+```console
+$ bin/nodr server -w path/to/workspace --kek-file /secure/path/nodr.kek
+```
+
+Sign in with the local administrator. From **Infrastructure**, create VMs or
+connect clusters. Select **Discover** for a connected cluster to see the same
+read-only live-guest classification as `nodr cluster discover`. Select
+**Changes** to plan, review destructive changes, and apply explicitly.
+
+Pass `--addr` only when you intentionally need another listen address; protect
+any non-loopback deployment with appropriate network and TLS controls.
+
+## Features
+
+- **YAML intent and validation** for workspaces, Proxmox clusters, networks,
+  templates, SSH keys, and virtual machines.
+- **Deterministic admission** of VM IDs, addresses, nodes, and MAC addresses.
+- **Structure-preserving OpenTofu projection** that preserves comments,
+  formatting, user code, and code-owned fields.
+- **Field ownership** reporting for synced fields, code-owned expressions, and
+  unmanaged extensions.
+- **OpenTofu plan and apply** with explicit destructive-change protection.
+- **Authenticated dashboard and API** for the same workspace model as the CLI.
 
 ## How it works
 
-A workspace is a directory in Git with a manifest, `nodr.yaml`, intent below
-`intent/` and engine code below `terraform/`.
-
 ```mermaid
 flowchart LR
-    intent["Intent<br/>intent/*.yaml"]
-    code["Engine code<br/>terraform/*/*.tf"]
-    owners["Field ownership"]
+    intent["Intent\nintent/*.yaml"]
+    code["Engine code\nterraform/*/*.tf"]
     pve["Proxmox VE"]
 
     intent -->|"render, put"| code
-    code -->|"lift"| owners
     code -->|"OpenTofu"| pve
 ```
 
-- **Intent** is the desired state in YAML, independent of any tool: a
-  `VirtualMachine` names its cluster, template, CPU, memory, disks and
-  networks, not the attributes of a provider. Admission writes the values that
-  nodr allocates, such as guest IDs and addresses, into intent.
-- **A lens** maps one kind of intent to engine code and back. The VM lens
-  renders a new managed block for a VM, puts intent values into an existing
-  block, and lifts values and their owners out of the code. It edits only the
-  bytes it has to.
-- **Engine code** is plain OpenTofu code for the `bpg/proxmox` provider, split
-  into state units: each directory right below `terraform/` that holds `.tf`
-  files, such as `terraform/pve-main-compute/`, is a root module with its own
-  state. A `# nodr:managed vm/<name>` comment marks each block that nodr
-  manages, and nodr never changes resources without it. You review and commit
-  the code like any other change.
-- **Field ownership** decides, for each field of a managed block, whether
-  intent or code has the last word. nodr derives it from the code:
-  - *Synced*: a literal that mirrors intent. nodr writes the intent value into
-    it.
-  - *Code-owned*: an expression, such as `cores = var.web_cores`, or a literal
-    pinned with a `# nodr:keep` comment. nodr leaves it as it is.
-  - *Extension*: an attribute that intent does not model, such as the `smbios`
-    block in the example. nodr keeps it as it is.
+Intent is tool-neutral YAML. nodr renders managed OpenTofu blocks and leaves
+user-owned blocks untouched. A `# nodr:managed <kind>/<name>` marker identifies
+blocks nodr may change; `# nodr:keep` makes a literal code-owned. Generated
+OpenTofu remains ordinary code that can run without nodr.
 
-Chapter 4 of the design describes
-[field ownership](docs/design/04-dual-mode-and-sync.md#44-field-level-ownership)
-and [lenses](docs/design/04-dual-mode-and-sync.md#45-lenses) in full, including
-the planned sync of code edits back into intent.
+## Status and roadmap
+
+nodr is pre-1.0 and its API can change. The
+[delivery roadmap](docs/design/13-operations-and-delivery.md#138-delivery-roadmap)
+covers the remaining foundation work and later networking, containers,
+interoperability, and SME-readiness milestones. Live discovery is available;
+adoption remains planned.
 
 ## Documentation
 
-- [Technical design](docs/README.md): the architecture of nodr, from the
-  resource model and sync to security and the delivery roadmap.
-- [Architecture decision records](docs/adr/README.md): the decisions behind
-  the design and the alternatives that were considered.
-- [Homelab example](examples/homelab/README.md): the workspace of the quick
-  start.
-- [Changelog](CHANGELOG.md): the notable changes in each release.
+- [Technical design](docs/README.md): architecture, resource model, sync, and
+  operations.
+- [Architecture decision records](docs/adr/README.md): design decisions and
+  alternatives.
+- [Homelab example](examples/homelab/README.md): reference workspace.
+- [Changelog](CHANGELOG.md): notable released and unreleased changes.
 
-`nodr --help` and `nodr <command> --help` describe each command and its flags.
+`nodr --help` and `nodr <command> --help` list commands and flags.
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) covers the development setup, the
-repository layout, tests, Git conventions and the release process.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers development setup, tests, Git
+conventions, and releases.
 
 ## License
 
