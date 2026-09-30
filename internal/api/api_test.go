@@ -1532,7 +1532,6 @@ func TestAuthSession_ReturnsUsernameAndCSRFToken(t *testing.T) {
 	}
 }
 
-
 func TestCSRF_RejectsAuthenticatedMutationWithoutHeader(t *testing.T) {
 	root := testWorkspace(t)
 	handler := testHandler(t, root)

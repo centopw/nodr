@@ -41,7 +41,7 @@ func SetupHandler(store *Store) http.Handler {
 			Secure:   r.TLS != nil,
 			SameSite: http.SameSiteStrictMode,
 		})
-		writeJSON(w, http.StatusOK, struct {
+		writeJSON(w, struct {
 			CSRFToken string `json:"csrfToken"`
 		}{CSRFToken: csrfToken})
 	})
@@ -56,7 +56,7 @@ func SetupStatusHandler(store *Store) http.Handler {
 			writeProblem(w, http.StatusInternalServerError, "Internal error", "unable to check setup status")
 			return
 		}
-		writeJSON(w, http.StatusOK, struct {
+		writeJSON(w, struct {
 			Initialized bool `json:"initialized"`
 		}{Initialized: initialized})
 	})
@@ -78,7 +78,7 @@ func SessionHandler(store *Store) http.Handler {
 			return
 		}
 		csrfToken, _ := store.SessionCSRFToken(r.Context(), cookie.Value)
-		writeJSON(w, http.StatusOK, struct {
+		writeJSON(w, struct {
 			Username  string `json:"username"`
 			CSRFToken string `json:"csrfToken"`
 		}{Username: username, CSRFToken: csrfToken})

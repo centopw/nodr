@@ -91,7 +91,6 @@ func TestStore_CreateAccountReplacesExisting(t *testing.T) {
 	}
 }
 
-
 func TestStore_SchemaHasBootstrapTableAndCSRFColumn(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

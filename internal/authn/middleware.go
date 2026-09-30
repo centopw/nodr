@@ -15,9 +15,9 @@ type problem struct {
 	Detail string `json:"detail"`
 }
 
-func writeJSON(w http.ResponseWriter, status int, value any) {
+func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(value)
 }
 
@@ -87,7 +87,7 @@ func LoginHandler(store *Store, _ string) http.Handler {
 			SameSite: http.SameSiteStrictMode,
 		})
 		csrfToken, _ := store.SessionCSRFToken(r.Context(), token)
-		writeJSON(w, http.StatusOK, struct {
+		writeJSON(w, struct {
 			CSRFToken string `json:"csrfToken"`
 		}{CSRFToken: csrfToken})
 	})

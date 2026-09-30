@@ -114,7 +114,6 @@ func TestLogoutHandler_ClearsSession(t *testing.T) {
 	}
 }
 
-
 func TestMiddleware_RejectsMutatingRequestWithoutCSRFHeader(t *testing.T) {
 	s := openStore(t)
 	if err := s.CreateAccount(t.Context(), "admin", "password12345"); err != nil {
