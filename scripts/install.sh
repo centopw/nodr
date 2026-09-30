@@ -50,6 +50,17 @@ fetch() {
   fi
 }
 
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1"
+  else
+    echo "install.sh: sha256sum or shasum is required" >&2
+    exit 1
+  fi
+}
+
 TMPDIR_INSTALL="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_INSTALL"' EXIT
 
@@ -63,27 +74,33 @@ if [ "${NODR_INSTALL_LOCAL_TEST:-0}" = "1" ]; then
   ARCHIVE="$TMPDIR_INSTALL/${ARCHIVE_NAME}"
 else
   if [ -z "$VERSION" ]; then
-    echo "install.sh: --version is required (or set NODR_INSTALL_LOCAL_TEST=1)" >&2
-    exit 2
+    fetch "https://api.github.com/repos/centopw/nodr/releases/latest" "$TMPDIR_INSTALL/latest.json"
+    VERSION="$(awk -F '"' '/"tag_name"/ { print $4; exit }' "$TMPDIR_INSTALL/latest.json")"
+    if [ -z "$VERSION" ]; then
+      echo "install.sh: could not determine the latest release version" >&2
+      exit 1
+    fi
   fi
   REPO="centopw/nodr"
   BASE="https://github.com/${REPO}/releases/download/${VERSION}"
   echo "Downloading nodr ${VERSION} for linux/${ARCH}..."
   ARCHIVE_NAME="nodr_${VERSION#v}_linux_${ARCH}.tar.gz"
-  fetch "${BASE}/${ARCHIVE_NAME}" "$TMPDIR_INSTALL/${ARCHIVE_NAME}"
+  ARCHIVE="$TMPDIR_INSTALL/${ARCHIVE_NAME}"
+  fetch "${BASE}/${ARCHIVE_NAME}" "$ARCHIVE"
   fetch "${BASE}/checksums.txt" "$TMPDIR_INSTALL/checksums.txt"
 fi
 
 echo "Verifying the archive checksum..."
 if [ "${NODR_INSTALL_LOCAL_TEST:-0}" = "1" ]; then
-  shasum -a 256 "$ARCHIVE" | sed "s|  .*/|  |" > "$TMPDIR_INSTALL/checksums.txt"
+  sha256 "$ARCHIVE" | sed "s|  .*/|  |" > "$TMPDIR_INSTALL/checksums.txt"
 fi
 WANT="$(grep " $(basename "$ARCHIVE")$" "$TMPDIR_INSTALL/checksums.txt" | awk '{print $1}')"
 if [ -z "$WANT" ]; then
   echo "install.sh: checksum entry missing for $(basename "$ARCHIVE")" >&2
   exit 1
 fi
-if ! echo "$WANT  $ARCHIVE" | shasum -a 256 -c - >/dev/null 2>&1; then
+GOT="$(sha256 "$ARCHIVE" | awk '{print $1}')"
+if [ "$WANT" != "$GOT" ]; then
   echo "install.sh: checksum mismatch for $(basename "$ARCHIVE")" >&2
   exit 1
 fi

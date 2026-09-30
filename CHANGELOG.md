@@ -7,6 +7,12 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Fixed
+- The release installer installs the latest stable release when no
+  `--version` is given, no longer fails with `ARCHIVE: parameter not set`
+  during checksum verification, and falls back from `sha256sum` to
+  `shasum -a 256` on hosts that lack the former.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added
