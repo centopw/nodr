@@ -103,3 +103,15 @@ func TestStore_SchemaHasBootstrapTableAndCSRFColumn(t *testing.T) {
 		t.Fatalf("insert session with csrf_token: %v", err)
 	}
 }
+
+func TestSentinelErrors_AreDistinct(t *testing.T) {
+	if errors.Is(authn.ErrBootstrapTokenRequired, authn.ErrInvalidCredentials) {
+		t.Error("ErrBootstrapTokenRequired must not alias ErrInvalidCredentials")
+	}
+	if errors.Is(authn.ErrSetupUnavailable, authn.ErrInvalidCredentials) {
+		t.Error("ErrSetupUnavailable must not alias ErrInvalidCredentials")
+	}
+	if errors.Is(authn.ErrBootstrapTokenRequired, authn.ErrSetupUnavailable) {
+		t.Error("ErrBootstrapTokenRequired must not alias ErrSetupUnavailable")
+	}
+}

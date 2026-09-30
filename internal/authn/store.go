@@ -21,8 +21,17 @@ import (
 	_ "modernc.org/sqlite" // registers modernc sqlite driver for database/sql
 )
 
-// ErrInvalidCredentials reports a wrong username or password.
+// ErrInvalidCredentials reports a wrong username or password, or a wrong
+// bootstrap token during Setup.
 var ErrInvalidCredentials = errors.New("authn: invalid credentials")
+
+// ErrBootstrapTokenRequired reports that no admin account exists yet and
+// NODR_BOOTSTRAP_TOKEN was not set.
+var ErrBootstrapTokenRequired = errors.New("authn: bootstrap token required, set NODR_BOOTSTRAP_TOKEN")
+
+// ErrSetupUnavailable reports that /setup was called but there is no
+// pending bootstrap token (already consumed, or never initialized).
+var ErrSetupUnavailable = errors.New("authn: setup is not available")
 
 // sessionTTL is the fixed absolute session lifetime for this slice; idle
 // timeouts are deferred (see the design doc's open risks).
@@ -194,7 +203,6 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 func (s *Store) Close() error {
 	return s.db.Close()
 }
-
 
 // DB exposes the underlying database for tests in this package that need
 // to assert on schema or seed rows directly. Not used by production code.
