@@ -14,9 +14,6 @@ import (
 //go:embed dist
 var files embed.FS
 
-//go:embed login.html
-var loginPage []byte
-
 // Handler returns a handler for the embedded web UI. Client-side routes fall
 // back to index.html; API routes remain 404 so they are never hidden by the UI.
 func Handler() http.Handler {
@@ -33,11 +30,6 @@ func handlerFS(files fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			http.NotFound(w, r)
-			return
-		}
-		if r.URL.Path == "/login" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			http.ServeContent(w, r, "login.html", time.Time{}, bytes.NewReader(loginPage))
 			return
 		}
 		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
