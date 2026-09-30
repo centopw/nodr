@@ -19,7 +19,7 @@ build: ## Build bin/nodr
 web-ui: ## Rebuild the web UI into internal/webui/dist (needs Node.js)
 	cd web && npm install && npm run build
 
-snapshot: ## Build the release archives in dist/ with GoReleaser
+snapshot: web-ui ## Build the release archives in dist/ with GoReleaser
 	@command -v goreleaser >/dev/null || { echo "make snapshot needs GoReleaser v2: https://goreleaser.com/install/" >&2; exit 1; }
 	goreleaser release --snapshot --clean
 
