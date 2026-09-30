@@ -1531,3 +1531,78 @@ func TestAuthSession_ReturnsUsernameAndCSRFToken(t *testing.T) {
 		t.Error("csrfToken is empty")
 	}
 }
+
+
+func TestCSRF_RejectsAuthenticatedMutationWithoutHeader(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", strings.NewReader(`{"command":"vm.create","params":{}}`)))
+	req.Header.Del("X-CSRF-Token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	checkProblem(t, rec, http.StatusForbidden, "Forbidden", "", "CSRF")
+}
+
+func TestCSRF_RejectsAuthenticatedMutationWithWrongHeader(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", strings.NewReader(`{"command":"vm.create","params":{}}`)))
+	req.Header.Set("X-CSRF-Token", "wrong-value")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	checkProblem(t, rec, http.StatusForbidden, "Forbidden", "", "CSRF")
+}
+
+func TestLogout_RejectsUnauthenticatedRequest(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, apiPrefix+"/auth/logout", nil))
+	checkProblem(t, rec, http.StatusUnauthorized, "Unauthorized", "", "session")
+}
+
+func TestLogout_RejectsAuthenticatedRequestWithoutCSRFHeader(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodPost, apiPrefix+"/auth/logout", nil))
+	req.Header.Del("X-CSRF-Token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	checkProblem(t, rec, http.StatusForbidden, "Forbidden", "", "CSRF")
+}
+
+func TestLogout_RejectsAuthenticatedRequestWithWrongCSRFHeader(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodPost, apiPrefix+"/auth/logout", nil))
+	req.Header.Set("X-CSRF-Token", "wrong-value")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	checkProblem(t, rec, http.StatusForbidden, "Forbidden", "", "CSRF")
+}
+
+func TestLogout_AcceptsAuthenticatedRequestWithCSRFHeaderAndInvalidatesSession(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodPost, apiPrefix+"/auth/logout", nil))
+	oldCookie, err := req.Cookie("nodr_session")
+	if err != nil {
+		t.Fatalf("session cookie before logout: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "nodr_session" || cookies[0].MaxAge != -1 {
+		t.Fatalf("cookies = %v, want one cleared nodr_session cookie", cookies)
+	}
+	followup := httptest.NewRequest(http.MethodGet, apiPrefix+"/workspaces", nil)
+	followup.AddCookie(oldCookie)
+	followupRec := httptest.NewRecorder()
+	handler.ServeHTTP(followupRec, followup)
+	if followupRec.Code != http.StatusUnauthorized {
+		t.Fatalf("status after logout = %d, want 401, body = %s", followupRec.Code, followupRec.Body.String())
+	}
+}
