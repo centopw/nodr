@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -278,5 +279,125 @@ func TestSessionUsername_UnknownSession_ReturnsFalse(t *testing.T) {
 	s := openStore(t)
 	if _, ok := s.SessionUsername(context.Background(), "no-such-token"); ok {
 		t.Error("ok = true for an unknown session token")
+	}
+}
+
+func TestSetup_Success_CreatesAccountAndSession(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.InitializeBootstrap(ctx, "bootstrap-token-1"); err != nil {
+		t.Fatalf("InitializeBootstrap: %v", err)
+	}
+	sessionToken, csrfToken, expiresAt, err := s.Setup(ctx, "bootstrap-token-1", "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if sessionToken == "" || csrfToken == "" {
+		t.Fatalf("sessionToken = %q, csrfToken = %q, want both non-empty", sessionToken, csrfToken)
+	}
+	if !expiresAt.After(time.Now()) {
+		t.Fatalf("expiresAt = %v, want future", expiresAt)
+	}
+	if !s.ValidateSession(ctx, sessionToken) {
+		t.Error("ValidateSession = false after Setup")
+	}
+	has, err := s.HasAccount(ctx)
+	if err != nil {
+		t.Fatalf("HasAccount: %v", err)
+	}
+	if !has {
+		t.Error("HasAccount = false after Setup")
+	}
+	if _, _, err := s.Authenticate(ctx, "admin", "password12345"); err != nil {
+		t.Errorf("Authenticate with the account Setup created: %v", err)
+	}
+}
+
+func TestSetup_WrongToken_RejectedWithoutConsuming(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.InitializeBootstrap(ctx, "bootstrap-token-1"); err != nil {
+		t.Fatalf("InitializeBootstrap: %v", err)
+	}
+	if _, _, _, err := s.Setup(ctx, "wrong-token", "admin", "password12345"); !errors.Is(err, authn.ErrInvalidCredentials) {
+		t.Fatalf("err = %v, want ErrInvalidCredentials", err)
+	}
+	has, err := s.HasAccount(ctx)
+	if err != nil {
+		t.Fatalf("HasAccount: %v", err)
+	}
+	if has {
+		t.Error("HasAccount = true after a rejected Setup call")
+	}
+	if _, _, _, err := s.Setup(ctx, "bootstrap-token-1", "admin", "password12345"); err != nil {
+		t.Errorf("Setup with the correct token after a wrong attempt: %v", err)
+	}
+}
+
+func TestSetup_NoBootstrapRow_ReturnsSetupUnavailable(t *testing.T) {
+	s := openStore(t)
+	if _, _, _, err := s.Setup(context.Background(), "anything", "admin", "password12345"); !errors.Is(err, authn.ErrSetupUnavailable) {
+		t.Fatalf("err = %v, want ErrSetupUnavailable", err)
+	}
+}
+
+func TestSetup_AlreadyConsumed_ReturnsSetupUnavailable(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.InitializeBootstrap(ctx, "bootstrap-token-1"); err != nil {
+		t.Fatalf("InitializeBootstrap: %v", err)
+	}
+	if _, _, _, err := s.Setup(ctx, "bootstrap-token-1", "admin", "password12345"); err != nil {
+		t.Fatalf("Setup (first): %v", err)
+	}
+	if _, _, _, err := s.Setup(ctx, "bootstrap-token-1", "admin2", "password67890"); !errors.Is(err, authn.ErrSetupUnavailable) {
+		t.Fatalf("err = %v, want ErrSetupUnavailable", err)
+	}
+}
+
+func TestSetup_ConcurrentDoubleSetup_ExactlyOneWins(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.InitializeBootstrap(ctx, "bootstrap-token-1"); err != nil {
+		t.Fatalf("InitializeBootstrap: %v", err)
+	}
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, username := range []string{"admin", "admin2"} {
+		wg.Add(1)
+		go func(username string) {
+			defer wg.Done()
+			_, _, _, err := s.Setup(ctx, "bootstrap-token-1", username, "password12345")
+			results <- err
+		}(username)
+	}
+	wg.Wait()
+	close(results)
+	successes, failures := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, authn.ErrSetupUnavailable):
+			failures++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("successes = %d, failures = %d, want 1 and 1", successes, failures)
+	}
+	var accountCount, sessionCount int
+	if err := s.DB().QueryRowContext(ctx, `SELECT count(*) FROM account`).Scan(&accountCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRowContext(ctx, `SELECT count(*) FROM session`).Scan(&sessionCount); err != nil {
+		t.Fatal(err)
+	}
+	if accountCount != 1 {
+		t.Errorf("account rows = %d, want 1", accountCount)
+	}
+	if sessionCount != 1 {
+		t.Errorf("session rows = %d, want 1", sessionCount)
 	}
 }

@@ -77,6 +77,8 @@ func Open(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("authn: open sqlite db: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("authn: init schema: %w", err)
@@ -275,6 +277,69 @@ func (s *Store) SessionUsername(ctx context.Context, token string) (string, bool
 		return "", false
 	}
 	return username, true
+}
+
+// Setup atomically consumes the pending bootstrap token, creating the one
+// admin account and a new session in a single transaction. It returns
+// ErrSetupUnavailable if there is no pending bootstrap token (none was ever
+// set, or it was already consumed), and ErrInvalidCredentials if token does
+// not match the stored hash -- the same status the HTTP handler uses for
+// both cases, so a caller cannot distinguish "already set up" from "wrong
+// token" from the response alone.
+func (s *Store) Setup(ctx context.Context, token, username, password string) (sessionToken, csrfToken string, expiresAt time.Time, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	var tokenHash string
+	var consumedAt sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT token_hash, consumed_at FROM bootstrap WHERE id = 1`).Scan(&tokenHash, &consumedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", time.Time{}, ErrSetupUnavailable
+	}
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: query bootstrap: %w", err)
+	}
+	if consumedAt.Valid {
+		return "", "", time.Time{}, ErrSetupUnavailable
+	}
+	if !verifyPassword(token, tokenHash) {
+		return "", "", time.Time{}, ErrInvalidCredentials
+	}
+
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: hash password: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO account (id, username, password_hash) VALUES (1, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET username = excluded.username, password_hash = excluded.password_hash
+	`, username, passwordHash); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: insert account: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE bootstrap SET consumed_at = ? WHERE id = 1`, time.Now().Unix()); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: mark bootstrap consumed: %w", err)
+	}
+
+	sessionToken, err = randomToken()
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: generate token: %w", err)
+	}
+	csrfToken, err = randomToken()
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: generate csrf token: %w", err)
+	}
+	expiresAt = time.Now().Add(sessionTTL)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session (token, expires_at, csrf_token) VALUES (?, ?, ?)`, sessionToken, expiresAt.Unix(), csrfToken); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: create session: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: commit setup: %w", err)
+	}
+	return sessionToken, csrfToken, expiresAt, nil
 }
 
 // Logout deletes the session for token.
