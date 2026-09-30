@@ -101,7 +101,6 @@ func testWorkspace(t *testing.T) string {
 	}
 	return root
 }
-
 func authedRequest(t *testing.T, h http.Handler, req *http.Request) *http.Request {
 	t.Helper()
 	loginReq := httptest.NewRequest(http.MethodPost, apiPrefix+"/auth/login", strings.NewReader(`{"username":"admin","password":"test-password-123"}`))
@@ -115,7 +114,16 @@ func authedRequest(t *testing.T, h http.Handler, req *http.Request) *http.Reques
 	if len(cookies) != 1 {
 		t.Fatalf("expected 1 cookie, got %d", len(cookies))
 	}
+	var body struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode login response body: %v", err)
+	}
 	req.AddCookie(cookies[0])
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		req.Header.Set("X-CSRF-Token", body.CSRFToken)
+	}
 	return req
 }
 
@@ -596,6 +604,13 @@ func TestCreateVMSerializesAdmission(t *testing.T) {
 		t.Fatalf("login failed: %s", loginRec.Body.String())
 	}
 	cookie := loginRec.Result().Cookies()[0]
+	var loginBody struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &loginBody); err != nil {
+		t.Fatalf("decode login response body: %v", err)
+	}
+	csrfToken := loginBody.CSRFToken
 
 	responses := make([]*httptest.ResponseRecorder, 2)
 	var wait sync.WaitGroup
@@ -612,6 +627,7 @@ func TestCreateVMSerializesAdmission(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/homelab/commands", bytes.NewReader(data))
 			req.Header.Set("Content-Type", "application/json")
 			req.AddCookie(cookie)
+			req.Header.Set("X-CSRF-Token", csrfToken)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			responses[idx] = rec
@@ -1025,14 +1041,23 @@ func TestWorkspaceApplyExpiry(t *testing.T) {
 	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", methodNotAllowed)
 	mux.HandleFunc("/api/", notFound)
 
-	rootMux := http.NewServeMux()
-	rootMux.HandleFunc("POST "+apiPrefix+"/auth/login", func(w http.ResponseWriter, r *http.Request) {
+	public := http.NewServeMux()
+	public.HandleFunc("POST "+apiPrefix+"/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		authn.LoginHandler(authStore, apiPrefix+"/auth/login").ServeHTTP(w, r)
 	})
-	rootMux.HandleFunc("POST "+apiPrefix+"/auth/logout", func(w http.ResponseWriter, r *http.Request) {
-		authn.LogoutHandler(authStore, apiPrefix+"/auth/logout").ServeHTTP(w, r)
-	})
-	rootMux.Handle("/", authn.Middleware(authStore, apiPrefix+"/auth/login", apiPrefix+"/auth/logout")(mux))
+	public.Handle("GET "+apiPrefix+"/setup/status", authn.SetupStatusHandler(authStore))
+	public.Handle("POST "+apiPrefix+"/setup", authn.SetupHandler(authStore))
+
+	protected := http.NewServeMux()
+	protected.Handle("POST "+apiPrefix+"/auth/logout", authn.LogoutHandler(authStore, apiPrefix+"/auth/logout"))
+	protected.Handle("GET "+apiPrefix+"/auth/session", authn.SessionHandler(authStore))
+	protected.Handle("/", mux)
+
+	rootMux := http.NewServeMux()
+	rootMux.Handle("POST "+apiPrefix+"/auth/login", public)
+	rootMux.Handle("GET "+apiPrefix+"/setup/status", public)
+	rootMux.Handle("POST "+apiPrefix+"/setup", public)
+	rootMux.Handle("/", authn.Middleware(authStore)(protected))
 
 	planRes := request(t, rootMux, http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{
 		"command": "workspace.plan",
