@@ -1,0 +1,24 @@
+[Unit]
+Description=nodr web control plane
+Documentation=https://github.com/centopw/nodr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nodr
+Group=nodr
+EnvironmentFile=/etc/nodr/nodr.env
+ExecStart=/usr/local/bin/nodr -w ${NODR_WORKSPACE} server --addr ${NODR_ADDR}
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the workspace directory is the only writable path.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=${NODR_WORKSPACE}
+
+[Install]
+WantedBy=multi-user.target
