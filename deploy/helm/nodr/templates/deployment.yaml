@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nodr.fullname" . }}
+  labels:
+    {{- include "nodr.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nodr.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "nodr.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: nodr
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "server"
+            - "-w"
+            - "/workspace"
+            - "--addr"
+            - "0.0.0.0:8080"
+          env:
+            - name: NODR_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nodr.secretName" . }}
+                  key: nodr-kek
+            {{- if or .Values.secret.existingSecret .Values.secret.bootstrapToken }}
+            - name: NODR_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nodr.secretName" . }}
+                  key: nodr-bootstrap-token
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: workspace
+          {{- if .Values.workspace.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.workspace.existingClaim }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ include "nodr.fullname" . }}-workspace
+          {{- end }}
