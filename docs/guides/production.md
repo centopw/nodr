@@ -19,18 +19,17 @@ by CI on `v*.*.*` tags, which rebuilds the embedded web UI before archiving.
 
 ## 1. Install the binary
 
-Use the installer (downloads the release archive, verifies its SHA-256
-against `checksums.txt`, installs only the binary). Replace `vX.Y.Z` with an
-existing release tag:
+Use the installer to install the latest stable release (it verifies the
+archive SHA-256 against `checksums.txt` and installs only the binary):
+
+```console
+$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh
+```
+
+To pin an existing release tag instead:
 
 ```console
 $ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --version vX.Y.Z
-```
-
-Or run it from a checkout:
-
-```console
-$ sh scripts/install.sh --version vX.Y.Z --prefix /usr/local
 ```
 
 Options: `--arch amd64|arm64` (default: machine), `--prefix DIR`
