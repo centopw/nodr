@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -38,6 +39,12 @@ func (a *app) serverCommand() *cobra.Command {
 				return err
 			}
 			defer authStore.Close()
+			token := os.Getenv("NODR_BOOTSTRAP_TOKEN")
+			// Bootstrap must complete even if the command context is already
+			// canceled during shutdown: it is a fast local DB write.
+			if err := authStore.InitializeBootstrap(context.WithoutCancel(cmd.Context()), token); err != nil {
+				return err
+			}
 			secretsStore, err := secrets.Open(filepath.Join(loaded.ws.Root, ".nodr", "secrets.db"), kek)
 			if err != nil {
 				return err

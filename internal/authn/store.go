@@ -21,8 +21,17 @@ import (
 	_ "modernc.org/sqlite" // registers modernc sqlite driver for database/sql
 )
 
-// ErrInvalidCredentials reports a wrong username or password.
+// ErrInvalidCredentials reports a wrong username or password, or a wrong
+// bootstrap token during Setup.
 var ErrInvalidCredentials = errors.New("authn: invalid credentials")
+
+// ErrBootstrapTokenRequired reports that no admin account exists yet and
+// NODR_BOOTSTRAP_TOKEN was not set.
+var ErrBootstrapTokenRequired = errors.New("authn: bootstrap token required, set NODR_BOOTSTRAP_TOKEN")
+
+// ErrSetupUnavailable reports that /setup was called but there is no
+// pending bootstrap token (already consumed, or never initialized).
+var ErrSetupUnavailable = errors.New("authn: setup is not available")
 
 // sessionTTL is the fixed absolute session lifetime for this slice; idle
 // timeouts are deferred (see the design doc's open risks).
@@ -42,7 +51,13 @@ CREATE TABLE IF NOT EXISTS account (
 );
 CREATE TABLE IF NOT EXISTS session (
     token      TEXT PRIMARY KEY,
-    expires_at INTEGER NOT NULL
+    expires_at INTEGER NOT NULL,
+    csrf_token TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS bootstrap (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    token_hash  TEXT NOT NULL,
+    consumed_at INTEGER
 );
 `
 
@@ -62,6 +77,8 @@ func Open(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("authn: open sqlite db: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("authn: init schema: %w", err)
@@ -77,6 +94,16 @@ const (
 	argon2KeyLen  = 32
 	saltLen       = 16
 )
+
+// randomToken returns a URL-safe random token suitable for a session token
+// or a CSRF token.
+func randomToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
 
 func hashPassword(password string) (string, error) {
 	salt := make([]byte, saltLen)
@@ -136,6 +163,38 @@ func (s *Store) CreateAccount(ctx context.Context, username, password string) er
 	return tx.Commit()
 }
 
+// InitializeBootstrap prepares the one-time bootstrap token used by
+// POST /setup to create the first admin account. It is a no-op, returning
+// nil regardless of token, if an account already exists. If no account
+// exists and token is empty, it returns ErrBootstrapTokenRequired. If no
+// account exists and token is non-empty, it hashes token with Argon2id and
+// upserts the single bootstrap row, always overwriting token_hash and
+// resetting consumed_at to NULL.
+func (s *Store) InitializeBootstrap(ctx context.Context, token string) error {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM account WHERE id = 1`).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("authn: check existing account: %w", err)
+	}
+	if exists > 0 {
+		return nil
+	}
+	if token == "" {
+		return ErrBootstrapTokenRequired
+	}
+	hash, err := hashPassword(token)
+	if err != nil {
+		return fmt.Errorf("authn: hash bootstrap token: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO bootstrap (id, token_hash, consumed_at) VALUES (1, ?, NULL)
+		ON CONFLICT(id) DO UPDATE SET token_hash = excluded.token_hash, consumed_at = NULL
+	`, hash); err != nil {
+		return fmt.Errorf("authn: upsert bootstrap token: %w", err)
+	}
+	return nil
+}
+
 // Authenticate checks username/password and, on success, creates a new
 // session and returns its opaque token and absolute expiry.
 func (s *Store) Authenticate(ctx context.Context, username, password string) (string, time.Time, error) {
@@ -150,13 +209,16 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (st
 	if subtle.ConstantTimeCompare([]byte(storedUsername), []byte(username)) != 1 || !verifyPassword(password, hash) {
 		return "", time.Time{}, ErrInvalidCredentials
 	}
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
+	token, err := randomToken()
+	if err != nil {
 		return "", time.Time{}, fmt.Errorf("authn: generate token: %w", err)
 	}
-	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	csrfToken, err := randomToken()
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("authn: generate csrf token: %w", err)
+	}
 	expiresAt := time.Now().Add(sessionTTL)
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO session (token, expires_at) VALUES (?, ?)`, token, expiresAt.Unix()); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO session (token, expires_at, csrf_token) VALUES (?, ?, ?)`, token, expiresAt.Unix(), csrfToken); err != nil {
 		return "", time.Time{}, fmt.Errorf("authn: create session: %w", err)
 	}
 	return token, expiresAt, nil
@@ -175,6 +237,111 @@ func (s *Store) ValidateSession(ctx context.Context, token string) bool {
 	return time.Now().Before(time.Unix(expiresAt, 0))
 }
 
+// SessionCSRFToken returns the CSRF token bound to a live session, and
+// whether the session exists at all (regardless of expiry, matching
+// ValidateSession's session lookup).
+func (s *Store) SessionCSRFToken(ctx context.Context, token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	var csrf string
+	err := s.db.QueryRowContext(ctx, `SELECT csrf_token FROM session WHERE token = ?`, token).Scan(&csrf)
+	if err != nil {
+		return "", false
+	}
+	return csrf, true
+}
+
+// HasAccount reports whether the one local admin account has been created.
+func (s *Store) HasAccount(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM account WHERE id = 1`).Scan(&count); err != nil {
+		return false, fmt.Errorf("authn: check account: %w", err)
+	}
+	return count > 0, nil
+}
+
+// SessionUsername returns the account username for a live session, and
+// whether the session exists.
+func (s *Store) SessionUsername(ctx context.Context, token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	var username string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT account.username FROM session
+		JOIN account ON account.id = 1
+		WHERE session.token = ?
+	`, token).Scan(&username)
+	if err != nil {
+		return "", false
+	}
+	return username, true
+}
+
+// Setup atomically consumes the pending bootstrap token, creating the one
+// admin account and a new session in a single transaction. It returns
+// ErrSetupUnavailable if there is no pending bootstrap token (none was ever
+// set, or it was already consumed), and ErrInvalidCredentials if token does
+// not match the stored hash -- the same status the HTTP handler uses for
+// both cases, so a caller cannot distinguish "already set up" from "wrong
+// token" from the response alone.
+func (s *Store) Setup(ctx context.Context, token, username, password string) (sessionToken, csrfToken string, expiresAt time.Time, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	var tokenHash string
+	var consumedAt sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT token_hash, consumed_at FROM bootstrap WHERE id = 1`).Scan(&tokenHash, &consumedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", time.Time{}, ErrSetupUnavailable
+	}
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: query bootstrap: %w", err)
+	}
+	if consumedAt.Valid {
+		return "", "", time.Time{}, ErrSetupUnavailable
+	}
+	if !verifyPassword(token, tokenHash) {
+		return "", "", time.Time{}, ErrInvalidCredentials
+	}
+
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: hash password: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO account (id, username, password_hash) VALUES (1, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET username = excluded.username, password_hash = excluded.password_hash
+	`, username, passwordHash); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: insert account: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE bootstrap SET consumed_at = ? WHERE id = 1`, time.Now().Unix()); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: mark bootstrap consumed: %w", err)
+	}
+
+	sessionToken, err = randomToken()
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: generate token: %w", err)
+	}
+	csrfToken, err = randomToken()
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: generate csrf token: %w", err)
+	}
+	expiresAt = time.Now().Add(sessionTTL)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session (token, expires_at, csrf_token) VALUES (?, ?, ?)`, sessionToken, expiresAt.Unix(), csrfToken); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: create session: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("authn: commit setup: %w", err)
+	}
+	return sessionToken, csrfToken, expiresAt, nil
+}
+
 // Logout deletes the session for token.
 func (s *Store) Logout(ctx context.Context, token string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM session WHERE token = ?`, token)
@@ -187,4 +354,10 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 // Close closes the underlying SQLite database.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// DB exposes the underlying database for tests in this package that need
+// to assert on schema or seed rows directly. Not used by production code.
+func (s *Store) DB() *sql.DB {
+	return s.db
 }

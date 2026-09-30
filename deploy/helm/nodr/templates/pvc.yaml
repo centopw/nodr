@@ -1,0 +1,17 @@
+{{- if .Values.workspace.create }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nodr.fullname" . }}-workspace
+  labels:
+    {{- include "nodr.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.workspace.size }}
+  {{- with .Values.workspace.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

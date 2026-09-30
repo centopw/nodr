@@ -1,23 +1,31 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  getSession,
+  getSetupStatus,
   getWorkspace,
   listResources,
   listWorkspaces,
+  logout,
   type NamedResource,
   type ProxmoxCluster,
   type VirtualMachine,
   type WorkspaceManifest,
 } from "./api";
 import Banner from "./components/Banner";
+import Button from "./components/Button";
 import ChangesPanel from "./ChangesPanel";
 import ClusterConnectWizard from "./ClusterConnectWizard";
 import ClusterList from "./ClusterList";
+import LoginForm from "./LoginForm";
 import NewVMForm from "./NewVMForm";
 import Overview from "./Overview";
+import SetupForm from "./SetupForm";
 import VMList from "./VMList";
 import WorkspaceRail from "./WorkspaceRail";
 
+type AuthPhase = "checking" | "needs-setup" | "needs-login" | "authenticated";
 type Section = "overview" | "infrastructure" | "changes";
+
 type InfrastructureView = "list" | "new";
 
 interface AppData {
@@ -31,6 +39,8 @@ interface AppData {
 
 export default function App() {
   const [section, setSection] = useState<Section>("infrastructure");
+  const [authPhase, setAuthPhase] = useState<AuthPhase>("checking");
+  const [username, setUsername] = useState<string | null>(null);
   const [infrastructureView, setInfrastructureView] = useState<InfrastructureView>("list");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return window.localStorage.getItem("nodr.sidebar-collapsed") === "true"; } catch { return false; }
@@ -44,8 +54,32 @@ export default function App() {
   const connectClusterRef = useRef<HTMLDivElement>(null);
   const shouldFocusConnectCluster = useRef(false);
   const [connectFocusToken, setConnectFocusToken] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function checkAuth() {
+      try {
+        const status = await getSetupStatus();
+        if (!status.initialized) {
+          if (!cancelled) setAuthPhase("needs-setup");
+          return;
+        }
+      } catch {
+        if (!cancelled) setLoadError("Unable to reach nodr.");
+        return;
+      }
+      try {
+        const session = await getSession();
+        if (!cancelled) { setUsername(session.username); setAuthPhase("authenticated"); }
+      } catch {
+        if (!cancelled) setAuthPhase("needs-login");
+      }
+    }
+    void checkAuth();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
+    if (authPhase !== "authenticated") return;
     let cancelled = false;
     async function loadWorkspaces() {
       try {
@@ -57,7 +91,16 @@ export default function App() {
     }
     void loadWorkspaces();
     return () => { cancelled = true; };
-  }, []);
+  }, [authPhase]);
+
+  async function handleLogout() {
+    await logout();
+    setUsername(null);
+    setWorkspaces([]);
+    setSelectedWorkspace(null);
+    setData(null);
+    setAuthPhase("needs-login");
+  }
 
   useEffect(() => {
     try { window.localStorage.setItem("nodr.sidebar-collapsed", String(sidebarCollapsed)); } catch { /* Storage can be unavailable. */ }
@@ -98,6 +141,9 @@ export default function App() {
   function showConnectCluster() { shouldFocusConnectCluster.current = true; setConnectFocusToken((token) => token + 1); showInfrastructure(); }
 
   if (loadError) return <main className="app-shell app-shell-centered"><Banner variant="error">{loadError}</Banner></main>;
+  if (authPhase === "checking") return <main className="app-shell-centered"><p className="status" role="status">Loading nodr…</p></main>;
+  if (authPhase === "needs-setup") return <SetupForm onSetupComplete={() => { void getSession().then((session) => { setUsername(session.username); setAuthPhase("authenticated"); }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr.")); }} />;
+  if (authPhase === "needs-login") return <LoginForm onLoggedIn={() => { void getSession().then((session) => { setUsername(session.username); setAuthPhase("authenticated"); }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr.")); }} />;
   if (loading || !selectedWorkspace || !data) return <main className="app-shell app-shell-centered"><p className="status" role="status">Loading workspace…</p></main>;
   const environments = Object.keys(data.manifest.environments);
 
@@ -109,7 +155,7 @@ export default function App() {
       <nav className="app-nav" aria-label="Primary">{navItems.map((item) => <button className={section === item.id ? "nav-item is-selected" : "nav-item"} key={item.id} onClick={() => item.id === "infrastructure" ? showInfrastructure() : (setSuccess(null), setSection(item.id))} aria-current={section === item.id ? "page" : undefined} title={sidebarCollapsed ? item.label : undefined}><span>{item.label}</span>{item.counts ? <><span className="nav-count" aria-label={`${item.counts.virtualMachines} virtual machines`}>VM {item.counts.virtualMachines}</span><span className="nav-count" aria-label={`${item.counts.clusters} clusters`}>Clusters {item.counts.clusters}</span></> : null}</button>)}</nav>
     </aside>
     <div className="app-main">
-      <header className="context-bar"><label className="workspace-picker"><span>Workspace</span><select value={data.workspace} onChange={(event) => { setSuccess(null); setSection("infrastructure"); setInfrastructureView("list"); setSelectedWorkspace(event.target.value); }}>{workspaces.map((workspace) => <option key={workspace}>{workspace}</option>)}</select></label><p className="breadcrumb" aria-label="Current location">{data.workspace} <span aria-hidden="true">/</span> {section === "infrastructure" && infrastructureView === "new" ? "Infrastructure / New VM" : navItems.find((item) => item.id === section)?.label}</p></header>
+      <header className="context-bar"><label className="workspace-picker"><span>Workspace</span><select value={data.workspace} onChange={(event) => { setSuccess(null); setSection("infrastructure"); setInfrastructureView("list"); setSelectedWorkspace(event.target.value); }}>{workspaces.map((workspace) => <option key={workspace}>{workspace}</option>)}</select></label><p className="breadcrumb" aria-label="Current location">{data.workspace} <span aria-hidden="true">/</span> {section === "infrastructure" && infrastructureView === "new" ? "Infrastructure / New VM" : navItems.find((item) => item.id === section)?.label}</p><div className="context-bar-account">{username ? <span className="eyebrow">{username}</span> : null}<Button variant="secondary" size="small" onClick={() => { void handleLogout(); }}>Sign out</Button></div></header>
       <div className="app-content">
         {section === "overview" ? <Overview virtualMachines={data.virtualMachines} clusters={data.clusters} networks={data.networks} templates={data.templates} onCreateVM={() => showInfrastructure("new")} onConnectCluster={showConnectCluster} onPlanChanges={() => setSection("changes")} /> : null}
         {section === "changes" ? <ChangesPanel workspace={data.workspace} onApplied={() => void refreshResources()} onBack={() => showInfrastructure()} /> : null}

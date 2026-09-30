@@ -36,8 +36,8 @@ export interface VirtualMachine {
 export interface ProxmoxCluster {
 	kind: "ProxmoxCluster";
 	name: string;
-	endpoints: string[];
-	nodes: string[];
+	endpoints?: string[];
+	nodes?: string[];
 }
 
 export interface ClusterConnectParams {
@@ -116,17 +116,88 @@ export class ProblemError extends Error {
   }
 }
 
+let csrfToken: string | null = null;
+
+function setCSRFToken(token: string | null) {
+  csrfToken = token;
+}
+
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (response.status === 401) {
-    window.location.href = "/login";
-    throw new Error("session expired, redirecting to /login");
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers = new Headers(init?.headers);
+  if (method !== "GET" && method !== "HEAD" && csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
   }
-  const body: unknown = await response.json();
+  const response = await fetch(url, { ...init, headers });
+  if (response.status === 401) {
+    setCSRFToken(null);
+    throw new Error("your session has expired, please sign in again");
+  }
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : undefined;
   if (!response.ok) {
     throw new ProblemError(body as ProblemDetails);
   }
   return body as T;
+}
+
+export interface SetupStatus {
+  initialized: boolean;
+}
+
+export interface SetupParams {
+  token: string;
+  username: string;
+  password: string;
+}
+
+export interface LoginParams {
+  username: string;
+  password: string;
+}
+
+export interface SessionInfo {
+  username: string;
+  csrfToken: string;
+}
+
+export function getSetupStatus(): Promise<SetupStatus> {
+  return fetchJSON(`${API_BASE}/setup/status`);
+}
+
+export async function setup(params: SetupParams): Promise<void> {
+  const response = await fetchJSON<{ csrfToken: string }>(
+    `${API_BASE}/setup`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    },
+  );
+  setCSRFToken(response.csrfToken);
+}
+
+export async function login(params: LoginParams): Promise<void> {
+  const response = await fetchJSON<{ csrfToken: string }>(
+    `${API_BASE}/auth/login`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    },
+  );
+  setCSRFToken(response.csrfToken);
+}
+
+export async function logout(): Promise<void> {
+  await fetchJSON(`${API_BASE}/auth/logout`, { method: "POST" });
+  setCSRFToken(null);
+}
+
+export async function getSession(): Promise<SessionInfo> {
+  const session = await fetchJSON<SessionInfo>(`${API_BASE}/auth/session`);
+  setCSRFToken(session.csrfToken);
+  return session;
 }
 
 export async function listWorkspaces(): Promise<WorkspaceSummary[]> {

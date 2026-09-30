@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 )
@@ -12,6 +13,12 @@ type problem struct {
 	Title  string `json:"title"`
 	Status int    `json:"status"`
 	Detail string `json:"detail"`
+}
+
+func writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 func writeProblem(w http.ResponseWriter, status int, title, detail string) {
@@ -37,6 +44,14 @@ func Middleware(store *Store, allowPaths ...string) func(http.Handler) http.Hand
 			if err != nil || !store.ValidateSession(r.Context(), cookie.Value) {
 				writeProblem(w, http.StatusUnauthorized, "Unauthorized", "a valid session is required")
 				return
+			}
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				csrf, ok := store.SessionCSRFToken(r.Context(), cookie.Value)
+				header := r.Header.Get("X-CSRF-Token")
+				if !ok || header == "" || subtle.ConstantTimeCompare([]byte(header), []byte(csrf)) != 1 {
+					writeProblem(w, http.StatusForbidden, "Forbidden", "a valid X-CSRF-Token header is required for this request")
+					return
+				}
 			}
 			h.ServeHTTP(w, r)
 		})
@@ -71,7 +86,10 @@ func LoginHandler(store *Store, _ string) http.Handler {
 			Secure:   r.TLS != nil,
 			SameSite: http.SameSiteStrictMode,
 		})
-		w.WriteHeader(http.StatusOK)
+		csrfToken, _ := store.SessionCSRFToken(r.Context(), token)
+		writeJSON(w, struct {
+			CSRFToken string `json:"csrfToken"`
+		}{CSRFToken: csrfToken})
 	})
 }
 

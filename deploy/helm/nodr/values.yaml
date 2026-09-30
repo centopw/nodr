@@ -1,0 +1,52 @@
+# Default values for the nodr chart.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/centopw/nodr
+  # Defaults to Chart appVersion. Set a specific release tag in production.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  hosts: []
+  #   - host: nodr.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  tls: []
+  #   - secretName: nodr-tls
+  #     hosts:
+  #       - nodr.example.com
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+# KEK and the one-time bootstrap token. Leave empty to create a Secret from
+# existingSecret, or set bootstrapToken to have the chart generate a Secret.
+secret:
+  # Name of an existing Secret with nodr-kek (and optional nodr-bootstrap-token).
+  existingSecret: ""
+  # Used only when existingSecret is empty.
+  kek: ""
+  bootstrapToken: ""
+
+# The workspace must already be a valid nodr workspace. nodr never
+# initializes one; place a complete workspace (nodr.yaml plus git history)
+# in the volume before starting.
+workspace:
+  existingClaim: ""
+  # When existingClaim is empty and create true, a PVC is created; the
+  # workspace still has to be provisioned into it.
+  create: false
+  size: 1Gi
+  storageClass: ""

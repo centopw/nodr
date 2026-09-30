@@ -1,0 +1,18 @@
+# Deploy the nodr web control plane with Docker Compose.
+#
+# The container requires an existing, valid nodr workspace mounted at
+# /workspace. nodr never creates a workspace; provision one from Git as
+# documented in docs/guides/production.md.
+#
+# Copy nodr.env.example to nodr.env (next to this file) and fill it in.
+services:
+  nodr:
+    image: ghcr.io/centopw/nodr:latest
+    ports:
+      # Loopback only: put a TLS-terminating reverse proxy in front.
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - nodr.env
+    volumes:
+      - ${NODR_WORKSPACE:?set NODR_WORKSPACE in nodr.env}:/workspace
+    restart: unless-stopped
