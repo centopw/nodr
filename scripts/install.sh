@@ -54,10 +54,13 @@ TMPDIR_INSTALL="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_INSTALL"' EXIT
 
 if [ "${NODR_INSTALL_LOCAL_TEST:-0}" = "1" ]; then
+  # Install from a GoReleaser snapshot in dist/ instead of GitHub. The archive
+  # is copied under the release name so the checksum lookup below matches the
+  # real release layout.
   VERSION="local"
-  cp "dist/nodr_local_${ARCH}.tar.gz" "$TMPDIR_INSTALL/archive.tar.gz" 2>/dev/null \
-    || cp dist/nodr_*_${ARCH}.tar.gz "$TMPDIR_INSTALL/archive.tar.gz"
-  ARCHIVE="$TMPDIR_INSTALL/archive.tar.gz"
+  ARCHIVE_NAME="nodr_${VERSION#v}_linux_${ARCH}.tar.gz"
+  cp dist/nodr_*_${ARCH}.tar.gz "$TMPDIR_INSTALL/${ARCHIVE_NAME}"
+  ARCHIVE="$TMPDIR_INSTALL/${ARCHIVE_NAME}"
 else
   if [ -z "$VERSION" ]; then
     echo "install.sh: --version is required (or set NODR_INSTALL_LOCAL_TEST=1)" >&2
@@ -66,13 +69,14 @@ else
   REPO="centopw/nodr"
   BASE="https://github.com/${REPO}/releases/download/${VERSION}"
   echo "Downloading nodr ${VERSION} for linux/${ARCH}..."
-  fetch "${BASE}/nodr_${VERSION#v}_linux_${ARCH}.tar.gz" "$TMPDIR_INSTALL/archive.tar.gz"
+  ARCHIVE_NAME="nodr_${VERSION#v}_linux_${ARCH}.tar.gz"
+  fetch "${BASE}/${ARCHIVE_NAME}" "$TMPDIR_INSTALL/${ARCHIVE_NAME}"
   fetch "${BASE}/checksums.txt" "$TMPDIR_INSTALL/checksums.txt"
 fi
 
 echo "Verifying the archive checksum..."
 if [ "${NODR_INSTALL_LOCAL_TEST:-0}" = "1" ]; then
-  shasum -a 256 "$ARCHIVE" | sed 's|  .*/|  |' > "$TMPDIR_INSTALL/checksums.txt"
+  shasum -a 256 "$ARCHIVE" | sed "s|  .*/|  |" > "$TMPDIR_INSTALL/checksums.txt"
 fi
 WANT="$(grep " $(basename "$ARCHIVE")$" "$TMPDIR_INSTALL/checksums.txt" | awk '{print $1}')"
 if [ -z "$WANT" ]; then
