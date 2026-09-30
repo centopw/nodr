@@ -8,6 +8,9 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 ## [Unreleased]
 
 ### Added
+- Web-only authentication foundation: bootstrap-token administrator setup,
+  session-based login/logout, per-session CSRF protection, and setup/session
+  state gating in the embedded dashboard.
 - The web UI now opens on an inventory-first Infrastructure view, with a
   persisted collapsible navigation rail, a workspace context bar, and
   state-derived cluster and virtual-machine actions: Overview, Infrastructure
