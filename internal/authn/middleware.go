@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 )
@@ -37,6 +38,14 @@ func Middleware(store *Store, allowPaths ...string) func(http.Handler) http.Hand
 			if err != nil || !store.ValidateSession(r.Context(), cookie.Value) {
 				writeProblem(w, http.StatusUnauthorized, "Unauthorized", "a valid session is required")
 				return
+			}
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				csrf, ok := store.SessionCSRFToken(r.Context(), cookie.Value)
+				header := r.Header.Get("X-CSRF-Token")
+				if !ok || header == "" || subtle.ConstantTimeCompare([]byte(header), []byte(csrf)) != 1 {
+					writeProblem(w, http.StatusForbidden, "Forbidden", "a valid X-CSRF-Token header is required for this request")
+					return
+				}
 			}
 			h.ServeHTTP(w, r)
 		})

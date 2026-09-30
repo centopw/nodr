@@ -103,3 +103,98 @@ func TestLogoutHandler_ClearsSession(t *testing.T) {
 		t.Error("session still valid after logout")
 	}
 }
+
+
+func TestMiddleware_RejectsMutatingRequestWithoutCSRFHeader(t *testing.T) {
+	s := openStore(t)
+	if err := s.CreateAccount(t.Context(), "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := s.Authenticate(t.Context(), "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/workspaces", nil)
+	req.AddCookie(&http.Cookie{Name: "nodr_session", Value: token})
+	rec := httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiddleware_RejectsMutatingRequestWithWrongCSRFHeader(t *testing.T) {
+	s := openStore(t)
+	if err := s.CreateAccount(t.Context(), "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := s.Authenticate(t.Context(), "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/workspaces", nil)
+	req.AddCookie(&http.Cookie{Name: "nodr_session", Value: token})
+	req.Header.Set("X-CSRF-Token", "wrong-value")
+	rec := httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiddleware_AllowsMutatingRequestWithCorrectCSRFHeader(t *testing.T) {
+	s := openStore(t)
+	if err := s.CreateAccount(t.Context(), "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := s.Authenticate(t.Context(), "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	csrf, ok := s.SessionCSRFToken(t.Context(), token)
+	if !ok {
+		t.Fatal("SessionCSRFToken: ok = false")
+	}
+	called := false
+	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/workspaces", nil)
+	req.AddCookie(&http.Cookie{Name: "nodr_session", Value: token})
+	req.Header.Set("X-CSRF-Token", csrf)
+	rec := httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !called {
+		t.Fatalf("status = %d, called = %v, body = %s", rec.Code, called, rec.Body.String())
+	}
+}
+
+func TestMiddleware_AllowsGETWithoutCSRFHeader(t *testing.T) {
+	s := openStore(t)
+	if err := s.CreateAccount(t.Context(), "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := s.Authenticate(t.Context(), "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	called := false
+	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/workspaces", nil)
+	req.AddCookie(&http.Cookie{Name: "nodr_session", Value: token})
+	rec := httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !called {
+		t.Fatalf("status = %d, called = %v, body = %s", rec.Code, called, rec.Body.String())
+	}
+}
