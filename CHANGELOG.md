@@ -7,6 +7,8 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-30
+
 ### Added
 - Linux-only release pipeline: GoReleaser now builds amd64 and arm64 Linux
   archives only, and both the release workflow and `make snapshot` rebuild

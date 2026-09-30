@@ -2,31 +2,32 @@
   <img src="docs/assets/banner.png" alt="nodr: Infrastructure, your way" width="100%">
 </p>
 
-nodr is a self-hosted control plane for Proxmox VE infrastructure. Run it on a
-Linux server (amd64 or arm64): administrators use the browser, while
-automation uses the HTTP API. A Git workspace holds declarative intent, and
-nodr compiles it into ordinary OpenTofu code — plan, review, then apply from
-the dashboard or the CLI.
+nodr is a self-hosted browser control plane for Proxmox VE infrastructure. Run
+it on a Linux server (amd64 or arm64): people use the browser, while automation
+uses the HTTP API. A Git workspace holds declarative intent, and nodr compiles
+it into ordinary OpenTofu code.
 
 ## Install
 
 Releases are Linux-only (amd64, arm64) tar.gz archives with SHA-256
 checksums, produced by CI from `v*.*.*` tags.
 
-**Installer** (verifies the checksum, installs only the binary, never
-touches workspaces or secrets):
+**Installer** (verifies the checksum, installs only the binary, never touches
+workspaces or secrets). Replace `vX.Y.Z` with an existing release tag:
 
 ```console
-$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --version v0.2.0
+$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --version vX.Y.Z
 ```
 
-**From a release archive, manually:**
+**From a release archive, manually** (replace `vX.Y.Z` with an existing release
+tag):
 
 ```console
-$ curl -fsSLO https://github.com/centopw/nodr/releases/download/v0.2.0/nodr_0.2.0_linux_amd64.tar.gz
-$ curl -fsSLO https://github.com/centopw/nodr/releases/download/v0.2.0/checksums.txt
+$ VERSION=vX.Y.Z
+$ curl -fsSLO "https://github.com/centopw/nodr/releases/download/${VERSION}/nodr_${VERSION#v}_linux_amd64.tar.gz"
+$ curl -fsSLO "https://github.com/centopw/nodr/releases/download/${VERSION}/checksums.txt"
 $ sha256sum -c checksums.txt --ignore-missing    # macOS: shasum -a 256 -c
-$ tar -xzf nodr_0.2.0_linux_amd64.tar.gz nodr
+$ tar -xzf "nodr_${VERSION#v}_linux_amd64.tar.gz" nodr
 $ ./nodr version
 ```
 
@@ -61,18 +62,11 @@ is a complete reference layout.
 
 2. Open `http://127.0.0.1:8080`, complete setup with the bootstrap token,
    and create the administrator. Remove `NODR_BOOTSTRAP_TOKEN` afterwards.
-3. Use **Infrastructure** to create VMs or connect clusters, and
-   **Changes** to plan and apply. The CLI drives the same workspace:
+3. Use **Infrastructure** to create VMs or connect clusters, and **Changes**
+   to plan and apply.
 
-   ```console
-   $ nodr validate -w /srv/nodr/workspace
-   $ nodr plan -w /srv/nodr/workspace
-   $ nodr apply -w /srv/nodr/workspace
-   ```
-
-Plan and apply need [OpenTofu](https://opentofu.org/) 1.8+. `apply` asks for
-confirmation; replacement and destruction additionally require
-`--allow-destroy`.
+For advanced local workspace inspection and development commands, see the
+[local development guide](docs/guides/local-development.md#advanced-local-tooling).
 
 The server binds loopback by default and speaks plain HTTP — terminate TLS
 in a reverse proxy. The [production guide](docs/guides/production.md) covers
@@ -80,8 +74,8 @@ systemd, Docker, Compose, Helm, backups, and upgrades in full.
 
 ## Features
 
-- **Browser and API over one model** — the dashboard dispatches the same
-  typed commands the API and CLI use.
+- **Browser and API over one model** — the dashboard dispatches the same typed
+  commands exposed through the HTTP API.
 - **YAML intent and validation** for workspaces, Proxmox clusters, networks,
   templates, SSH keys, and virtual machines.
 - **Deterministic admission** of VM IDs, addresses, nodes, and MAC addresses.
