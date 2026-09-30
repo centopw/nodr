@@ -13,34 +13,41 @@ Releases are Linux-only (amd64, arm64) tar.gz archives with SHA-256
 checksums, produced by CI from `v*.*.*` tags.
 
 **Installer** (installs the latest stable release, verifies its checksum, and
-never touches workspaces or secrets):
+never touches workspaces or secrets). Requires root to write `/usr/local/bin`:
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh
+```sh
+curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sudo sh
 ```
 
-To pin an existing release, add `--version vX.Y.Z`:
+`sudo` must wrap `sh` — `sudo curl ... | sh` downloads as root but still runs
+the installer as your user. Without root, install into your own `PATH`:
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --version vX.Y.Z
+```sh
+curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --prefix "$HOME/.local"
+```
+
+To pin an existing release tag, add `--version vX.Y.Z`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sudo sh -s -- --version vX.Y.Z
 ```
 
 **From a release archive, manually** (replace `vX.Y.Z` with an existing release
 tag):
 
-```console
-$ VERSION=vX.Y.Z
-$ curl -fsSLO "https://github.com/centopw/nodr/releases/download/${VERSION}/nodr_${VERSION#v}_linux_amd64.tar.gz"
-$ curl -fsSLO "https://github.com/centopw/nodr/releases/download/${VERSION}/checksums.txt"
-$ sha256sum -c checksums.txt --ignore-missing    # macOS: shasum -a 256 -c
-$ tar -xzf "nodr_${VERSION#v}_linux_amd64.tar.gz" nodr
-$ ./nodr version
+```sh
+VERSION=vX.Y.Z
+curl -fsSLO "https://github.com/centopw/nodr/releases/download/${VERSION}/nodr_${VERSION#v}_linux_amd64.tar.gz"
+curl -fsSLO "https://github.com/centopw/nodr/releases/download/${VERSION}/checksums.txt"
+sha256sum -c checksums.txt --ignore-missing    # macOS: shasum -a 256 -c
+tar -xzf "nodr_${VERSION#v}_linux_amd64.tar.gz" nodr
+./nodr version
 ```
 
 **Docker:**
 
-```console
-$ docker run -p 127.0.0.1:8080:8080 -v /srv/nodr/workspace:/workspace \
+```sh
+docker run -p 127.0.0.1:8080:8080 -v /srv/nodr/workspace:/workspace \
     -e NODR_KEK="$(openssl rand -base64 32)" \
     ghcr.io/centopw/nodr:latest
 ```

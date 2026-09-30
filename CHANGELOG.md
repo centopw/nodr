@@ -12,6 +12,9 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   `--version` is given, no longer fails with `ARCHIVE: parameter not set`
   during checksum verification, and falls back from `sha256sum` to
   `shasum -a 256` on hosts that lack the former.
+- The installer fails fast when the install prefix is not writable instead of
+  downloading first and failing with `install: cannot create regular file`;
+  the error now names `sudo` and the `--prefix "$HOME/.local"` alternative.
 
 ## [0.2.0] - 2026-09-30
 

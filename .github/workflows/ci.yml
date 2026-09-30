@@ -108,6 +108,8 @@ jobs:
           go-version: stable
       - name: Test the release notes script
         run: scripts/changelog-notes_test.sh
+      - name: Test the release installer
+        run: scripts/install_test.sh
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
