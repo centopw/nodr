@@ -93,10 +93,9 @@ type app struct {
 func (a *app) rootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "nodr",
-		Short: "Manage Proxmox VE, OpenWrt and container infrastructure as code or through a GUI",
-		Long: `nodr keeps infrastructure intent and engine code in one Git workspace and
-keeps the two in sync. These commands work on a workspace checked out on
-disk.`,
+		Short: "Run the nodr workspace control plane",
+		Long: `nodr serves the browser control plane and HTTP API for a Git-backed
+workspace.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

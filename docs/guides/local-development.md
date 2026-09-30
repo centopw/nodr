@@ -61,7 +61,12 @@ $ NODR_KEK="$(cat path/to/workspace/.nodr/kek.b64)" \
 3. From **Infrastructure**, create VMs or connect clusters; from
    **Changes**, plan and apply explicitly.
 
-The CLI works against the same workspace:
+## Advanced local tooling
+
+The browser control plane and HTTP API are the primary shipped interfaces.
+These CLI commands remain available for local development and operator
+workflows against the same workspace; they are not required for browser
+administration.
 
 ```console
 $ bin/nodr validate -w path/to/workspace
