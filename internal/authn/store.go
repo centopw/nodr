@@ -151,6 +151,38 @@ func (s *Store) CreateAccount(ctx context.Context, username, password string) er
 	return tx.Commit()
 }
 
+// InitializeBootstrap prepares the one-time bootstrap token used by
+// POST /setup to create the first admin account. It is a no-op, returning
+// nil regardless of token, if an account already exists. If no account
+// exists and token is empty, it returns ErrBootstrapTokenRequired. If no
+// account exists and token is non-empty, it hashes token with Argon2id and
+// upserts the single bootstrap row, always overwriting token_hash and
+// resetting consumed_at to NULL.
+func (s *Store) InitializeBootstrap(ctx context.Context, token string) error {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM account WHERE id = 1`).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("authn: check existing account: %w", err)
+	}
+	if exists > 0 {
+		return nil
+	}
+	if token == "" {
+		return ErrBootstrapTokenRequired
+	}
+	hash, err := hashPassword(token)
+	if err != nil {
+		return fmt.Errorf("authn: hash bootstrap token: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO bootstrap (id, token_hash, consumed_at) VALUES (1, ?, NULL)
+		ON CONFLICT(id) DO UPDATE SET token_hash = excluded.token_hash, consumed_at = NULL
+	`, hash); err != nil {
+		return fmt.Errorf("authn: upsert bootstrap token: %w", err)
+	}
+	return nil
+}
+
 // Authenticate checks username/password and, on success, creates a new
 // session and returns its opaque token and absolute expiry.
 func (s *Store) Authenticate(ctx context.Context, username, password string) (string, time.Time, error) {
