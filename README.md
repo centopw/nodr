@@ -12,8 +12,14 @@ it into ordinary OpenTofu code.
 Releases are Linux-only (amd64, arm64) tar.gz archives with SHA-256
 checksums, produced by CI from `v*.*.*` tags.
 
-**Installer** (verifies the checksum, installs only the binary, never touches
-workspaces or secrets). Replace `vX.Y.Z` with an existing release tag:
+**Installer** (installs the latest stable release, verifies its checksum, and
+never touches workspaces or secrets):
+
+```console
+$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh
+```
+
+To pin an existing release, add `--version vX.Y.Z`:
 
 ```console
 $ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --version vX.Y.Z
