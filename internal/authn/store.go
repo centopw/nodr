@@ -93,6 +93,16 @@ const (
 	saltLen       = 16
 )
 
+// randomToken returns a URL-safe random token suitable for a session token
+// or a CSRF token.
+func randomToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
 func hashPassword(password string) (string, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
@@ -197,13 +207,16 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (st
 	if subtle.ConstantTimeCompare([]byte(storedUsername), []byte(username)) != 1 || !verifyPassword(password, hash) {
 		return "", time.Time{}, ErrInvalidCredentials
 	}
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
+	token, err := randomToken()
+	if err != nil {
 		return "", time.Time{}, fmt.Errorf("authn: generate token: %w", err)
 	}
-	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	csrfToken, err := randomToken()
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("authn: generate csrf token: %w", err)
+	}
 	expiresAt := time.Now().Add(sessionTTL)
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO session (token, expires_at) VALUES (?, ?)`, token, expiresAt.Unix()); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO session (token, expires_at, csrf_token) VALUES (?, ?, ?)`, token, expiresAt.Unix(), csrfToken); err != nil {
 		return "", time.Time{}, fmt.Errorf("authn: create session: %w", err)
 	}
 	return token, expiresAt, nil
@@ -220,6 +233,21 @@ func (s *Store) ValidateSession(ctx context.Context, token string) bool {
 		return false
 	}
 	return time.Now().Before(time.Unix(expiresAt, 0))
+}
+
+// SessionCSRFToken returns the CSRF token bound to a live session, and
+// whether the session exists at all (regardless of expiry, matching
+// ValidateSession's session lookup).
+func (s *Store) SessionCSRFToken(ctx context.Context, token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	var csrf string
+	err := s.db.QueryRowContext(ctx, `SELECT csrf_token FROM session WHERE token = ?`, token).Scan(&csrf)
+	if err != nil {
+		return "", false
+	}
+	return csrf, true
 }
 
 // Logout deletes the session for token.

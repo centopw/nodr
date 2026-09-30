@@ -185,3 +185,50 @@ func TestInitializeBootstrap_RerunBeforeSetup_OverwritesHash(t *testing.T) {
 		t.Error("token_hash unchanged after re-running InitializeBootstrap with a different token")
 	}
 }
+
+func TestAuthenticate_GeneratesCSRFToken(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := s.Authenticate(ctx, "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	csrf, ok := s.SessionCSRFToken(ctx, token)
+	if !ok {
+		t.Fatal("SessionCSRFToken: ok = false, want true")
+	}
+	if csrf == "" {
+		t.Error("csrf token is empty")
+	}
+}
+
+func TestAuthenticate_CSRFTokenDiffersPerSession(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token1, _, err := s.Authenticate(ctx, "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate (1): %v", err)
+	}
+	token2, _, err := s.Authenticate(ctx, "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate (2): %v", err)
+	}
+	csrf1, _ := s.SessionCSRFToken(ctx, token1)
+	csrf2, _ := s.SessionCSRFToken(ctx, token2)
+	if csrf1 == csrf2 {
+		t.Error("two sessions got the same csrf token")
+	}
+}
+
+func TestSessionCSRFToken_UnknownSession_ReturnsFalse(t *testing.T) {
+	s := openStore(t)
+	if _, ok := s.SessionCSRFToken(context.Background(), "no-such-token"); ok {
+		t.Error("ok = true for an unknown session token")
+	}
+}
