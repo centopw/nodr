@@ -1,6 +1,7 @@
 package authn_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,6 +54,15 @@ func TestLoginHandler_SetsSessionCookieAndMiddlewareAccepts(t *testing.T) {
 	cookies := loginRec.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != "nodr_session" {
 		t.Fatalf("cookies = %v, want one nodr_session cookie", cookies)
+	}
+	var body struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.NewDecoder(loginRec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode login response body: %v", err)
+	}
+	if body.CSRFToken == "" {
+		t.Error("csrfToken is empty in the login response body")
 	}
 
 	protected := authn.Middleware(s, "/login")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -15,6 +15,12 @@ type problem struct {
 	Detail string `json:"detail"`
 }
 
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
 func writeProblem(w http.ResponseWriter, status int, title, detail string) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
@@ -80,7 +86,10 @@ func LoginHandler(store *Store, _ string) http.Handler {
 			Secure:   r.TLS != nil,
 			SameSite: http.SameSiteStrictMode,
 		})
-		w.WriteHeader(http.StatusOK)
+		csrfToken, _ := store.SessionCSRFToken(r.Context(), token)
+		writeJSON(w, http.StatusOK, struct {
+			CSRFToken string `json:"csrfToken"`
+		}{CSRFToken: csrfToken})
 	})
 }
 
