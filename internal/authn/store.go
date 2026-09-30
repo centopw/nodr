@@ -250,6 +250,33 @@ func (s *Store) SessionCSRFToken(ctx context.Context, token string) (string, boo
 	return csrf, true
 }
 
+// HasAccount reports whether the one local admin account has been created.
+func (s *Store) HasAccount(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM account WHERE id = 1`).Scan(&count); err != nil {
+		return false, fmt.Errorf("authn: check account: %w", err)
+	}
+	return count > 0, nil
+}
+
+// SessionUsername returns the account username for a live session, and
+// whether the session exists.
+func (s *Store) SessionUsername(ctx context.Context, token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	var username string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT account.username FROM session
+		JOIN account ON account.id = 1
+		WHERE session.token = ?
+	`, token).Scan(&username)
+	if err != nil {
+		return "", false
+	}
+	return username, true
+}
+
 // Logout deletes the session for token.
 func (s *Store) Logout(ctx context.Context, token string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM session WHERE token = ?`, token)

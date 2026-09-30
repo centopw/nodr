@@ -232,3 +232,51 @@ func TestSessionCSRFToken_UnknownSession_ReturnsFalse(t *testing.T) {
 		t.Error("ok = true for an unknown session token")
 	}
 }
+
+func TestHasAccount_FalseThenTrue(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	has, err := s.HasAccount(ctx)
+	if err != nil {
+		t.Fatalf("HasAccount: %v", err)
+	}
+	if has {
+		t.Error("HasAccount = true before any account is created")
+	}
+	if err := s.CreateAccount(ctx, "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	has, err = s.HasAccount(ctx)
+	if err != nil {
+		t.Fatalf("HasAccount (after create): %v", err)
+	}
+	if !has {
+		t.Error("HasAccount = false after CreateAccount")
+	}
+}
+
+func TestSessionUsername_ReturnsAccountUsername(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	token, _, err := s.Authenticate(ctx, "admin", "password12345")
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	username, ok := s.SessionUsername(ctx, token)
+	if !ok {
+		t.Fatal("SessionUsername: ok = false, want true")
+	}
+	if username != "admin" {
+		t.Errorf("username = %q, want %q", username, "admin")
+	}
+}
+
+func TestSessionUsername_UnknownSession_ReturnsFalse(t *testing.T) {
+	s := openStore(t)
+	if _, ok := s.SessionUsername(context.Background(), "no-such-token"); ok {
+		t.Error("ok = true for an unknown session token")
+	}
+}
