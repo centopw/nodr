@@ -8,6 +8,22 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 ## [Unreleased]
 
 ### Added
+- Linux-only release pipeline: GoReleaser now builds amd64 and arm64 Linux
+  archives only, and both the release workflow and `make snapshot` rebuild
+  the embedded web UI before archiving so released binaries carry the
+  current dashboard.
+- Release installer (`scripts/install.sh`): downloads a release archive,
+  verifies its SHA-256 checksum, and installs the binary; it never creates
+  workspaces, secrets, or services.
+- Deployment templates for the single-binary server: a hardened systemd unit
+  with a root-owned `0600` environment file example, a Docker image that
+  builds the web UI before compiling the Go binary, a Docker Compose file,
+  and a Helm chart — all mounting an existing, valid nodr workspace at
+  `/workspace`.
+- Operator documentation: browser-first README install paths plus
+  `docs/guides/local-development.md` and `docs/guides/production.md`
+  covering the workspace contract, environment variables, reverse proxy TLS
+  boundary, backups, and upgrades.
 - Web-only authentication foundation: bootstrap-token administrator setup,
   session-based login/logout, per-session CSRF protection, and setup/session
   state gating in the embedded dashboard.
