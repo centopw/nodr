@@ -1454,3 +1454,55 @@ func TestClusterDiscover_UnknownCluster(t *testing.T) {
 	})
 	checkProblem(t, res, http.StatusNotFound, "Cluster not found", "", "does-not-exist")
 }
+
+func TestSetupStatus_PublicNoAuthRequired(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := httptest.NewRequest(http.MethodGet, apiPrefix+"/setup/status", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Initialized bool `json:"initialized"`
+	}
+	decodeResponse(t, rec, &body)
+	if !body.Initialized {
+		t.Error("initialized = false, want true (testHandler already creates an account)")
+	}
+}
+
+func TestSetup_PublicNoAuthRequired_RejectedWhenAlreadyInitialized(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := httptest.NewRequest(http.MethodPost, apiPrefix+"/setup", strings.NewReader(`{"token":"anything","username":"admin2","password":"password12345"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthSession_ReturnsUsernameAndCSRFToken(t *testing.T) {
+	root := testWorkspace(t)
+	handler := testHandler(t, root)
+	req := authedRequest(t, handler, httptest.NewRequest(http.MethodGet, apiPrefix+"/auth/session", nil))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Username  string `json:"username"`
+		CSRFToken string `json:"csrfToken"`
+	}
+	decodeResponse(t, rec, &body)
+	if body.Username != "admin" {
+		t.Errorf("username = %q, want %q", body.Username, "admin")
+	}
+	if body.CSRFToken == "" {
+		t.Error("csrfToken is empty")
+	}
+}

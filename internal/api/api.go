@@ -59,14 +59,23 @@ func Handler(ctx context.Context, root string, auth *authn.Store, secretsStore *
 	mux.HandleFunc(apiPrefix+"/workspaces/{workspace}/resources/{kind}/{name}", methodNotAllowed)
 	mux.HandleFunc("/api/", notFound)
 
-	root2 := http.NewServeMux()
-	root2.HandleFunc("POST "+apiPrefix+"/auth/login", func(w http.ResponseWriter, r *http.Request) {
+	public := http.NewServeMux()
+	public.HandleFunc("POST "+apiPrefix+"/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		authn.LoginHandler(auth, apiPrefix+"/auth/login").ServeHTTP(w, r)
 	})
-	root2.HandleFunc("POST "+apiPrefix+"/auth/logout", func(w http.ResponseWriter, r *http.Request) {
-		authn.LogoutHandler(auth, apiPrefix+"/auth/logout").ServeHTTP(w, r)
-	})
-	root2.Handle("/", authn.Middleware(auth, apiPrefix+"/auth/login", apiPrefix+"/auth/logout")(mux))
+	public.Handle("GET "+apiPrefix+"/setup/status", authn.SetupStatusHandler(auth))
+	public.Handle("POST "+apiPrefix+"/setup", authn.SetupHandler(auth))
+
+	protected := http.NewServeMux()
+	protected.Handle("POST "+apiPrefix+"/auth/logout", authn.LogoutHandler(auth, apiPrefix+"/auth/logout"))
+	protected.Handle("GET "+apiPrefix+"/auth/session", authn.SessionHandler(auth))
+	protected.Handle("/", mux)
+
+	root2 := http.NewServeMux()
+	root2.Handle("POST "+apiPrefix+"/auth/login", public)
+	root2.Handle("GET "+apiPrefix+"/setup/status", public)
+	root2.Handle("POST "+apiPrefix+"/setup", public)
+	root2.Handle("/", authn.Middleware(auth)(protected))
 	return root2
 }
 
