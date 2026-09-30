@@ -88,3 +88,18 @@ func TestStore_CreateAccountReplacesExisting(t *testing.T) {
 		t.Errorf("new account: %v", err)
 	}
 }
+
+
+func TestStore_SchemaHasBootstrapTableAndCSRFColumn(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	if _, err := s.DB().ExecContext(ctx, `INSERT INTO bootstrap (id, token_hash, consumed_at) VALUES (1, 'x', NULL)`); err != nil {
+		t.Fatalf("insert into bootstrap: %v", err)
+	}
+	if err := s.CreateAccount(ctx, "admin", "password12345"); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := s.DB().ExecContext(ctx, `INSERT INTO session (token, expires_at, csrf_token) VALUES ('tok', 0, 'csrf')`); err != nil {
+		t.Fatalf("insert session with csrf_token: %v", err)
+	}
+}

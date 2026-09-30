@@ -42,7 +42,13 @@ CREATE TABLE IF NOT EXISTS account (
 );
 CREATE TABLE IF NOT EXISTS session (
     token      TEXT PRIMARY KEY,
-    expires_at INTEGER NOT NULL
+    expires_at INTEGER NOT NULL,
+    csrf_token TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS bootstrap (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    token_hash  TEXT NOT NULL,
+    consumed_at INTEGER
 );
 `
 
@@ -187,4 +193,11 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 // Close closes the underlying SQLite database.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+
+// DB exposes the underlying database for tests in this package that need
+// to assert on schema or seed rows directly. Not used by production code.
+func (s *Store) DB() *sql.DB {
+	return s.db
 }
