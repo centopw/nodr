@@ -36,8 +36,8 @@ export interface VirtualMachine {
 export interface ProxmoxCluster {
 	kind: "ProxmoxCluster";
 	name: string;
-	endpoints: string[];
-	nodes: string[];
+	endpoints?: string[];
+	nodes?: string[];
 }
 
 export interface ClusterConnectParams {
@@ -133,7 +133,8 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
     setCSRFToken(null);
     throw new Error("your session has expired, please sign in again");
   }
-  const body: unknown = await response.json();
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : undefined;
   if (!response.ok) {
     throw new ProblemError(body as ProblemDetails);
   }

@@ -142,8 +142,8 @@ export default function App() {
 
   if (loadError) return <main className="app-shell app-shell-centered"><Banner variant="error">{loadError}</Banner></main>;
   if (authPhase === "checking") return <main className="app-shell-centered"><p className="status" role="status">Loading nodr…</p></main>;
-  if (authPhase === "needs-setup") return <SetupForm onSetupComplete={() => setAuthPhase("authenticated")} />;
-  if (authPhase === "needs-login") return <LoginForm onLoggedIn={() => setAuthPhase("authenticated")} />;
+  if (authPhase === "needs-setup") return <SetupForm onSetupComplete={() => { void getSession().then((session) => { setUsername(session.username); setAuthPhase("authenticated"); }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr.")); }} />;
+  if (authPhase === "needs-login") return <LoginForm onLoggedIn={() => { void getSession().then((session) => { setUsername(session.username); setAuthPhase("authenticated"); }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr.")); }} />;
   if (loading || !selectedWorkspace || !data) return <main className="app-shell app-shell-centered"><p className="status" role="status">Loading workspace…</p></main>;
   const environments = Object.keys(data.manifest.environments);
 
