@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centopw/nodr/internal/authn"
 	"github.com/centopw/nodr/internal/bootstrap"
 )
 
@@ -205,6 +207,39 @@ func TestServerCompletesUnattendedBootstrap(t *testing.T) {
 	if state.Workspace != filepath.Join("workspaces", "unattended") || !strings.Contains(stdout.String(), "listening on") {
 		t.Fatalf("state/stdout = %#v/%q", state, stdout.String())
 	}
+	if _, err := os.Stat(filepath.Join(dataDir, ".nodr", "authn.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("data root auth database = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, state.Workspace, ".nodr", "authn.db")); err != nil {
+		t.Fatalf("workspace auth database = %v", err)
+	}
+}
+
+func TestServerBrowserBootstrapInvalidKEKFailsBeforeListen(t *testing.T) {
+	kekFile := filepath.Join(t.TempDir(), "invalid-kek")
+	if err := os.WriteFile(kekFile, []byte("not a key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), nil, []string{"server", "--data-dir", t.TempDir(), "--kek-file", kekFile, "--addr", addr}, strings.NewReader(""), &stdout, &stderr); code != exitError {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "listening on") {
+		t.Fatalf("server listened before rejecting KEK: %q", stdout.String())
+	}
+	connection, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
+	if err == nil {
+		connection.Close()
+		t.Fatal("listener remained reachable after KEK resolution failure")
+	}
 }
 
 func setupBootstrap(t *testing.T, dataDir, workspace string) {
@@ -304,5 +339,64 @@ func TestServerBootstrapHandlerPreparationFailureDoesNotCommitOrSetCookie(t *tes
 	switcher.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("retry setup = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServerBootstrapHandlerSerializesConcurrentSetup(t *testing.T) {
+	dataDir := t.TempDir()
+	oldGit := bootstrap.GitExecutable
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
+	token := strings.Repeat("t", 32)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	service := bootstrap.Service{
+		Config: bootstrap.Config{DataDir: dataDir},
+		SetupAuth: func(ctx context.Context, store *authn.Store, request bootstrap.Request) (string, string, time.Time, error) {
+			select {
+			case entered <- struct{}{}:
+				<-release
+			default:
+			}
+			return store.Setup(ctx, request.Token, request.Username, request.Password)
+		},
+	}
+	handler := bootstrapHandler(&bootstrapSetup{service: service, token: token})
+	post := func(workspace string) int {
+		body := fmt.Sprintf(`{"token":%q,"workspaceName":%q,"username":"admin","password":%q}`, token, workspace, strings.Repeat("p", 16))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body)))
+		return rec.Code
+	}
+	first := make(chan int, 1)
+	go func() { first <- post("first") }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first setup did not reach authorization barrier")
+	}
+	second := make(chan int, 1)
+	go func() { second <- post("second") }()
+	select {
+	case status := <-second:
+		t.Fatalf("concurrent setup completed before first setup: %d", status)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if status := <-first; status != http.StatusOK {
+		t.Fatalf("first setup = %d", status)
+	}
+	if status := <-second; status/100 == 2 {
+		t.Fatalf("second setup = %d, want non-2xx", status)
+	}
+	state, err := bootstrap.LoadState(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Workspace != filepath.Join("workspaces", "first") {
+		t.Fatalf("workspace = %q", state.Workspace)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "workspaces", "second")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("second workspace = %v, want not exist", err)
 	}
 }

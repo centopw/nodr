@@ -91,7 +91,11 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 		if _, _, _, err := service.Setup(ctx, bootstrap.Request{Token: values[3], WorkspaceName: values[0], Username: values[1], Password: values[2]}); err != nil {
 			return err
 		}
-		return a.runRecordedServer(ctx, addr, dataDir, kek)
+		state, err := bootstrap.LoadState(dataDir)
+		if err != nil {
+			return err
+		}
+		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek)
 	}
 	state, err := bootstrap.LoadState(dataDir)
 	if err == nil {
@@ -113,6 +117,9 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 	}
 	if !isLoopback(addr) {
 		fmt.Fprintln(a.stderr, "warning: bootstrap endpoint is remotely reachable; it requires the bootstrap token and should be protected by TLS at a reverse proxy")
+	}
+	if _, err := bootstrap.ResolveKEK(config, a.stderr); err != nil {
+		return err
 	}
 	token, err := generatedToken()
 	if err != nil {
@@ -210,8 +217,10 @@ func (s *switchingHandler) prepareNormal(ctx context.Context) func(context.Conte
 }
 
 type bootstrapSetup struct {
-	service bootstrap.Service
-	token   string
+	mu       sync.Mutex
+	service  bootstrap.Service
+	token    string
+	completed bool
 }
 
 func bootstrapHandler(setup *bootstrapSetup) http.Handler {
@@ -231,6 +240,12 @@ func bootstrapHandler(setup *bootstrapSetup) http.Handler {
 			bootstrapProblem(w, http.StatusForbidden, "Forbidden", "setup is not available")
 			return
 		}
+		setup.mu.Lock()
+		defer setup.mu.Unlock()
+		if setup.completed {
+			bootstrapProblem(w, http.StatusForbidden, "Forbidden", "setup is not available")
+			return
+		}
 		session, csrf, expiresAt, err := setup.service.Setup(r.Context(), bootstrap.Request{Token: setup.token, WorkspaceName: request.WorkspaceName, Username: request.Username, Password: request.Password})
 		if err != nil {
 			if field, ok := bootstrap.IsValidationError(err); ok {
@@ -244,6 +259,7 @@ func bootstrapHandler(setup *bootstrapSetup) http.Handler {
 			bootstrapProblem(w, http.StatusInternalServerError, "Internal error", "unable to complete setup")
 			return
 		}
+		setup.completed = true
 		http.SetCookie(w, &http.Cookie{Name: "nodr_session", Value: session, Path: "/", Expires: expiresAt, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
