@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +34,33 @@ func fakeGit(t *testing.T, log string, fail bool) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+type synchronizedBuffer struct {
+	mu      sync.Mutex
+	Buffer  bytes.Buffer
+	written chan struct{}
+}
+
+func newSynchronizedBuffer() *synchronizedBuffer {
+	return &synchronizedBuffer{written: make(chan struct{}, 1)}
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	n, err := b.Buffer.Write(p)
+	b.mu.Unlock()
+	select {
+	case b.written <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
 }
 
 func TestServerPartialBootstrapEnvironmentFailsBeforeListen(t *testing.T) {
@@ -63,6 +92,64 @@ func TestServerBrowserBootstrapWarnsForNonLoopback(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "generated bootstrap token") {
 		t.Error("generated token was not printed")
+	}
+}
+
+func TestServerBrowserBootstrapAcceptsGeneratedToken(t *testing.T) {
+	dataDir := t.TempDir()
+	oldGit := bootstrap.GitExecutable
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stdout := newSynchronizedBuffer()
+	var stderr bytes.Buffer
+	exit := make(chan int, 1)
+	go func() {
+		exit <- Run(ctx, nil, []string{"server", "--data-dir", dataDir, "--addr", "127.0.0.1:0"}, strings.NewReader(""), stdout, &stderr)
+	}()
+
+	var token, addr string
+	deadline := time.After(time.Second)
+	for token == "" || addr == "" {
+		select {
+		case <-stdout.written:
+			output := stdout.String()
+			if fields := strings.Fields(output); len(fields) >= 5 && strings.Contains(output, "generated bootstrap token") {
+				token = strings.TrimSuffix(fields[4], ";")
+			}
+			if index := strings.LastIndex(output, "listening on "); index >= 0 {
+				addr = strings.TrimSpace(output[index+len("listening on "):])
+			}
+		case <-deadline:
+			t.Fatalf("server output = %q, stderr = %q", stdout.String(), stderr.String())
+		}
+	}
+
+	body := fmt.Sprintf(`{"token":%q,"workspaceName":"home","username":"admin","password":%q}`, token, strings.Repeat("p", 16))
+	response, err := http.Post("http://"+addr+"/api/v1/setup", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("setup status = %d", response.StatusCode)
+	}
+	if strings.Contains(response.Request.URL.String(), token) || strings.Contains(string(responseBody), token) {
+		t.Fatal("setup response reflected token")
+	}
+	if response.Header.Get("Set-Cookie") == "" {
+		t.Fatal("setup did not reach coordinator")
+	}
+
+	cancel()
+	if code := <-exit; code != exitOK {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 }
 

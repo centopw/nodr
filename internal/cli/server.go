@@ -120,7 +120,10 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 	}
 	fmt.Fprintf(a.stdout, "warning: generated bootstrap token %s; treat it as a secret because anyone with it can create the administrator account\n", token)
 	switcher := &switchingHandler{}
-	setup := &bootstrapSetup{service: bootstrap.Service{Config: config, Prepare: switcher.prepareNormal(ctx)}}
+	setup := &bootstrapSetup{
+		service: bootstrap.Service{Config: config, Prepare: switcher.prepareNormal(ctx)},
+		token:   token,
+	}
 	switcher.handler = bootstrapHandler(setup)
 	return runHandlerServer(ctx, addr, a.stdout, switcher)
 }
