@@ -33,6 +33,7 @@ type Service struct {
 	Config     Config
 	WriteState func(string, State) error
 	SetupAuth  func(context.Context, *authn.Store, Request) (sessionToken, csrfToken string, expiresAt time.Time, err error)
+	Prepare    func(context.Context, string, []byte) (commit func(), cleanup func(), err error)
 }
 
 // Setup creates an attempt-local workspace and its first authenticated session.
@@ -80,6 +81,19 @@ func (s Service) Setup(ctx context.Context, req Request) (sessionToken, csrfToke
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
+	var commit func()
+	if s.Prepare != nil {
+		var cleanup func()
+		commit, cleanup, err = s.Prepare(ctx, root, kek)
+		if err != nil {
+			return "", "", time.Time{}, err
+		}
+		defer func() {
+			if !completed {
+				cleanup()
+			}
+		}()
+	}
 	writeState := s.WriteState
 	if writeState == nil {
 		writeState = WriteState
@@ -88,6 +102,9 @@ func (s Service) Setup(ctx context.Context, req Request) (sessionToken, csrfToke
 		return "", "", time.Time{}, fmt.Errorf("bootstrap: write completion state: %w", err)
 	}
 	completed = true
+	if commit != nil {
+		commit()
+	}
 	return sessionToken, csrfToken, expiresAt, nil
 }
 

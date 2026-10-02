@@ -135,19 +135,12 @@ func TestServerBootstrapHandlerCutsOverAfterSetup(t *testing.T) {
 	oldGit := bootstrap.GitExecutable
 	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
-	kek, err := bootstrap.ResolveKEK(bootstrap.Config{DataDir: dataDir}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	token := strings.Repeat("t", 32)
 	switcher := &switchingHandler{}
-	setup := &bootstrapSetup{service: bootstrap.Service{Config: bootstrap.Config{DataDir: dataDir}}, token: token, onSuccess: func() error {
-		state, err := bootstrap.LoadState(dataDir)
-		if err != nil {
-			return err
-		}
-		return switcher.swapNormal(context.Background(), filepath.Join(dataDir, state.Workspace), kek)
-	}}
+	setup := &bootstrapSetup{
+		service: bootstrap.Service{Config: bootstrap.Config{DataDir: dataDir}, Prepare: switcher.prepareNormal(context.Background())},
+		token:   token,
+	}
 	switcher.handler = bootstrapHandler(setup)
 	rec := httptest.NewRecorder()
 	switcher.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil))
@@ -186,30 +179,43 @@ func TestServerBootstrapHandlerCutsOverAfterSetup(t *testing.T) {
 	}
 }
 
-func TestServerBootstrapHandlerDoesNotReportSuccessBeforeCutover(t *testing.T) {
+func TestServerBootstrapHandlerPreparationFailureDoesNotCommitOrSetCookie(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
 	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	token := strings.Repeat("t", 32)
-	switcher := &switchingHandler{}
-	setup := &bootstrapSetup{
-		service: bootstrap.Service{Config: bootstrap.Config{DataDir: dataDir}},
-		token:   token,
-		onSuccess: func() error {
-			return errors.New("cannot install normal handler")
+	prepareErr := errors.New("cannot prepare normal handler")
+	service := bootstrap.Service{
+		Config: bootstrap.Config{DataDir: dataDir},
+		Prepare: func(context.Context, string, []byte) (func(), func(), error) {
+			return nil, nil, prepareErr
 		},
 	}
+	switcher := &switchingHandler{}
+	setup := &bootstrapSetup{service: service, token: token}
 	switcher.handler = bootstrapHandler(setup)
 	body := fmt.Sprintf(`{"token":%q,"workspaceName":"home","username":"admin","password":%q}`, token, strings.Repeat("p", 16))
+
 	rec := httptest.NewRecorder()
 	switcher.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body)))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("setup = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("cookies = %#v, want none", cookies)
+	}
+	if _, err := bootstrap.LoadState(dataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("bootstrap state = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "workspaces", "home")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed attempt workspace remains: %v", err)
+	}
+
+	setup.service.Prepare = switcher.prepareNormal(context.Background())
 	rec = httptest.NewRecorder()
-	switcher.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil))
+	switcher.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("handler changed after failed cutover: %d", rec.Code)
+		t.Fatalf("retry setup = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }

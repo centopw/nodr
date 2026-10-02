@@ -114,23 +114,13 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 	if !isLoopback(addr) {
 		fmt.Fprintln(a.stderr, "warning: bootstrap endpoint is remotely reachable; it requires the bootstrap token and should be protected by TLS at a reverse proxy")
 	}
-	kek, err := bootstrap.ResolveKEK(config, a.stderr)
-	if err != nil {
-		return err
-	}
 	token, err := generatedToken()
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(a.stdout, "warning: generated bootstrap token %s; treat it as a secret because anyone with it can create the administrator account\n", token)
 	switcher := &switchingHandler{}
-	setup := &bootstrapSetup{service: bootstrap.Service{Config: config}, token: token, onSuccess: func() error {
-		state, err := bootstrap.LoadState(dataDir)
-		if err != nil {
-			return err
-		}
-		return switcher.swapNormal(ctx, filepath.Join(dataDir, state.Workspace), kek)
-	}}
+	setup := &bootstrapSetup{service: bootstrap.Service{Config: config, Prepare: switcher.prepareNormal(ctx)}}
 	switcher.handler = bootstrapHandler(setup)
 	return runHandlerServer(ctx, addr, a.stdout, switcher)
 }
@@ -191,27 +181,34 @@ func (s *switchingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.ServeHTTP(w, r)
 }
 
-func (s *switchingHandler) swapNormal(ctx context.Context, root string, kek []byte) error {
-	authStore, err := authn.Open(filepath.Join(root, ".nodr", "authn.db"))
-	if err != nil {
-		return err
+func (s *switchingHandler) prepareNormal(ctx context.Context) func(context.Context, string, []byte) (func(), func(), error) {
+	return func(_ context.Context, root string, kek []byte) (func(), func(), error) {
+		authStore, err := authn.Open(filepath.Join(root, ".nodr", "authn.db"))
+		if err != nil {
+			return nil, nil, err
+		}
+		secretsStore, err := secrets.Open(filepath.Join(root, ".nodr", "secrets.db"), kek)
+		if err != nil {
+			authStore.Close()
+			return nil, nil, err
+		}
+		handler := normalHandler(ctx, root, authStore, secretsStore)
+		commit := func() {
+			s.mu.Lock()
+			s.auth, s.secrets, s.handler = authStore, secretsStore, handler
+			s.mu.Unlock()
+		}
+		cleanup := func() {
+			_ = authStore.Close()
+			_ = secretsStore.Close()
+		}
+		return commit, cleanup, nil
 	}
-	secretsStore, err := secrets.Open(filepath.Join(root, ".nodr", "secrets.db"), kek)
-	if err != nil {
-		authStore.Close()
-		return err
-	}
-	s.mu.Lock()
-	s.auth, s.secrets = authStore, secretsStore
-	s.handler = normalHandler(ctx, root, authStore, secretsStore)
-	s.mu.Unlock()
-	return nil
 }
 
 type bootstrapSetup struct {
-	service   bootstrap.Service
-	token     string
-	onSuccess func() error
+	service bootstrap.Service
+	token   string
 }
 
 func bootstrapHandler(setup *bootstrapSetup) http.Handler {
@@ -245,10 +242,6 @@ func bootstrapHandler(setup *bootstrapSetup) http.Handler {
 			return
 		}
 		http.SetCookie(w, &http.Cookie{Name: "nodr_session", Value: session, Path: "/", Expires: expiresAt, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
-		if err := setup.onSuccess(); err != nil {
-			bootstrapProblem(w, http.StatusInternalServerError, "Internal error", "unable to complete setup")
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
 			CSRFToken string `json:"csrfToken"`
