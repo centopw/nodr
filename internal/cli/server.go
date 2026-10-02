@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -121,7 +122,7 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stdout, "warning: generated bootstrap token; treat server output as secret")
+	fmt.Fprintf(a.stdout, "warning: generated bootstrap token %s; treat it as a secret because anyone with it can create the administrator account\n", token)
 	switcher := &switchingHandler{}
 	setup := &bootstrapSetup{service: bootstrap.Service{Config: config}, token: token, onSuccess: func() error {
 		state, err := bootstrap.LoadState(dataDir)
@@ -213,24 +214,64 @@ type bootstrapSetup struct {
 	onSuccess func() error
 }
 
-func (s *bootstrapSetup) SetupWorkspace(ctx context.Context, _, workspace, username, password string) (string, string, time.Time, error) {
-	return s.service.Setup(ctx, bootstrap.Request{Token: s.token, WorkspaceName: workspace, Username: username, Password: password})
-}
-
 func bootstrapHandler(setup *bootstrapSetup) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/setup", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authn.SetupHandler(setup).ServeHTTP(w, r)
-		if w.Header().Get("Content-Type") == "application/json" {
-			_ = setup.onSuccess()
+	mux.HandleFunc("POST /api/v1/setup", func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Token         string `json:"token"`
+			WorkspaceName string `json:"workspaceName"`
+			Username      string `json:"username"`
+			Password      string `json:"password"`
 		}
-	}))
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			bootstrapProblem(w, http.StatusBadRequest, "Invalid request", "request body must be JSON")
+			return
+		}
+		if request.Token != setup.token {
+			bootstrapProblem(w, http.StatusForbidden, "Forbidden", "setup is not available")
+			return
+		}
+		session, csrf, expiresAt, err := setup.service.Setup(r.Context(), bootstrap.Request{Token: setup.token, WorkspaceName: request.WorkspaceName, Username: request.Username, Password: request.Password})
+		if err != nil {
+			if field, ok := bootstrap.IsValidationError(err); ok {
+				bootstrapFieldProblem(w, field)
+				return
+			}
+			if errors.Is(err, authn.ErrSetupUnavailable) || errors.Is(err, authn.ErrInvalidCredentials) {
+				bootstrapProblem(w, http.StatusForbidden, "Forbidden", "setup is not available")
+				return
+			}
+			bootstrapProblem(w, http.StatusInternalServerError, "Internal error", "unable to complete setup")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "nodr_session", Value: session, Path: "/", Expires: expiresAt, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+		if err := setup.onSuccess(); err != nil {
+			bootstrapProblem(w, http.StatusInternalServerError, "Internal error", "unable to complete setup")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			CSRFToken string `json:"csrfToken"`
+		}{CSRFToken: csrf})
+	})
 	mux.HandleFunc("GET /api/v1/setup/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"initialized":false}`))
 	})
 	mux.Handle("/", webui.Handler())
 	return mux
+}
+
+func bootstrapProblem(w http.ResponseWriter, status int, title, detail string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"type": "about:blank", "title": title, "status": status, "detail": detail})
+}
+
+func bootstrapFieldProblem(w http.ResponseWriter, field string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]any{"type": "about:blank", "title": "Invalid request", "status": http.StatusBadRequest, "invalid-params": []map[string]string{{"name": field, "reason": "invalid value"}}})
 }
 
 func normalHandler(ctx context.Context, root string, auth *authn.Store, secretsStore *secrets.Store) http.Handler {
