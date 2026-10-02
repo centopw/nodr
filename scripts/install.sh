@@ -64,6 +64,13 @@ sha256() {
 TMPDIR_INSTALL="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_INSTALL"' EXIT
 
+
+# Fail before downloading when the destination cannot be written, so a
+# non-root `curl | sh` does not download an archive it cannot install.
+if ! mkdir -p "$PREFIX/bin" 2>/dev/null || [ ! -w "$PREFIX/bin" ]; then
+  echo "install.sh: cannot write to $PREFIX/bin (run the installer with sudo, or pass --prefix \"\$HOME/.local\")" >&2
+  exit 1
+fi
 if [ "${NODR_INSTALL_LOCAL_TEST:-0}" = "1" ]; then
   # Install from a GoReleaser snapshot in dist/ instead of GitHub. The archive
   # is copied under the release name so the checksum lookup below matches the
@@ -113,6 +120,5 @@ if [ -e "$DEST" ] && [ "$FORCE" -ne 1 ]; then
   exit 1
 fi
 
-mkdir -p "$PREFIX/bin"
 install -m 0755 "$TMPDIR_INSTALL/nodr" "$DEST"
 echo "Installed nodr at $DEST"

@@ -19,17 +19,26 @@ by CI on `v*.*.*` tags, which rebuilds the embedded web UI before archiving.
 
 ## 1. Install the binary
 
-Use the installer to install the latest stable release (it verifies the
-archive SHA-256 against `checksums.txt` and installs only the binary):
+Install the latest stable release as root (the installer verifies the archive
+SHA-256 against `checksums.txt` and installs only the binary):
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh
+```sh
+curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sudo sh
 ```
 
-To pin an existing release tag instead:
+`sudo` must wrap `sh` — `sudo curl ... | sh` downloads as root but still runs
+the installer as your user, which cannot write `/usr/local/bin`.
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --version vX.Y.Z
+Without root, install into your own `PATH`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sh -s -- --prefix "$HOME/.local"
+```
+
+To pin an existing release tag instead, add `--version vX.Y.Z`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/centopw/nodr/main/scripts/install.sh | sudo sh -s -- --version vX.Y.Z
 ```
 
 Options: `--arch amd64|arm64` (default: machine), `--prefix DIR`

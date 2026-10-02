@@ -138,3 +138,16 @@ if PATH="$NO_CHECKSUM_BIN" CURL_LOG="$CURL_LOG" CHECKSUM_LOG="$CHECKSUM_LOG" \
   exit 1
 fi
 grep -F 'sha256sum or shasum is required' "$TMP/no-checksum.out" >/dev/null
+
+# An unwritable prefix fails fast with an actionable error.
+RO_PREFIX="$TMP/ro-prefix"
+mkdir -p "$RO_PREFIX"
+chmod 555 "$RO_PREFIX"
+: > "$CURL_LOG"
+if PATH="$BIN:$PATH" CURL_LOG="$CURL_LOG" FIXTURE="$FIXTURE" sh "$ROOT/scripts/install.sh" \
+  --version v0.2.0 --arch amd64 --prefix "$RO_PREFIX" >"$TMP/ro.out" 2>&1; then
+  echo 'unwritable prefix unexpectedly succeeded' >&2
+  exit 1
+fi
+grep -F 'cannot write to' "$TMP/ro.out" >/dev/null
+grep -F 'sudo' "$TMP/ro.out" >/dev/null
