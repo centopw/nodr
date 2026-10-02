@@ -153,21 +153,26 @@ an absent token continues to fail before serving an account-less workspace.
 
 ## Atomicity and recovery
 
-Before any mutation, validate every browser/environment field and verify the target is absent.
+Before any mutation, validate every browser/environment field and verify the
+target is absent. The bootstrap auth database is always located at
+`<attempt-workspace>/.nodr/authn.db`; it is part of the attempt-created
+workspace, not a data-root database.
 
 For a new target, bootstrap tracks whether it created the workspace directory,
 auth database, and completion-state temporary file. If manifest validation,
 Git initialization, Git add/commit, admin creation, session creation, or
 completion-state persistence fails, it:
 
-1. closes stores and removes only the newly created workspace directory and
-   temporary completion state;
-2. leaves any generated `<data-dir>/kek` durable and reuses it on every retry
+1. closes the attempt auth and secrets stores before cleanup;
+2. removes only the newly created workspace directory, which removes that
+   attempt's auth database, account, sessions, bootstrap-token hash, and token
+   consumption state together;
+3. removes temporary completion state;
+4. leaves any generated `<data-dir>/kek` durable and reuses it on every retry
    and restart; bootstrap never deletes or replaces it during rollback;
-3. leaves any pre-existing target and configured key material untouched; and
-4. keeps browser bootstrap available for retry, or exits with a non-zero error
+5. leaves any pre-existing target and configured key material untouched; and
+6. keeps browser bootstrap available for retry, or exits with a non-zero error
    in unattended mode.
-
 Completion state is atomically renamed only after all preceding operations
 succeed. A crash before that rename leaves an incomplete target. On the next
 start, the absence of `bootstrap.json` plus any directory under
@@ -183,9 +188,15 @@ The complete group is:
 NODR_BOOTSTRAP_WORKSPACE_NAME
 NODR_BOOTSTRAP_ADMIN_USERNAME
 NODR_BOOTSTRAP_ADMIN_PASSWORD
+NODR_BOOTSTRAP_TOKEN
 ```
 
-All three are required together. `NODR_BOOTSTRAP_TOKEN` is optional and ignored by unattended bootstrap. `NODR_KEK` or the existing `--kek-file` mechanism remains required when the normal secrets store is opened; existing `--kek-file` takes precedence over `NODR_KEK` under its current `secrets.LoadKEK` contract.
+All four are required together. Unattended bootstrap passes its configured
+token to the existing `authn.Store.Setup` transaction, so it has the same
+one-time authorization and account/session semantics as browser bootstrap.
+`NODR_KEK` or the existing `--kek-file` mechanism remains required when the
+normal secrets store is opened; existing `--kek-file` takes precedence over
+`NODR_KEK` under its current `secrets.LoadKEK` contract.
 
 CLI flags retain precedence for server process configuration:
 
