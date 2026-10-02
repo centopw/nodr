@@ -1,11 +1,13 @@
 package authn_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/centopw/nodr/internal/authn"
 )
@@ -65,6 +67,27 @@ func TestSetupHandler_Success(t *testing.T) {
 	if body.CSRFToken == "" {
 		t.Error("csrfToken is empty")
 	}
+}
+
+func TestSetupHandlerPassesWorkspaceNameToSetupService(t *testing.T) {
+	service := setupServiceStub{}
+	handler := authn.SetupHandler(&service)
+	req := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(`{"token":"bootstrap-token-1","workspaceName":"home","username":"admin","password":"password12345"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if service.workspaceName != "home" {
+		t.Fatalf("workspaceName = %q, want home", service.workspaceName)
+	}
+}
+
+type setupServiceStub struct{ workspaceName string }
+
+func (s *setupServiceStub) SetupWorkspace(_ context.Context, _, workspaceName, _, _ string) (string, string, time.Time, error) {
+	s.workspaceName = workspaceName
+	return "session", "csrf", time.Now().Add(time.Hour), nil
 }
 
 func TestSetupHandler_WrongToken_Returns403WithNoDistinguishingDetail(t *testing.T) {
