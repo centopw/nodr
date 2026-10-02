@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func TestStateRoundTripAndMode(t *testing.T) {
 }
 
 func TestStateRejectsUnsafeWorkspace(t *testing.T) {
-	for _, workspace := range []string{"/tmp/workspace", "workspaces/../escape", "../workspaces/home", "workspace/home", "workspaces/home/"} {
+	for _, workspace := range []string{"/tmp/workspace", "workspaces/../escape", "../workspaces/home", "workspace/home", "workspaces/home/", "workspaces/home/nested"} {
 		t.Run(workspace, func(t *testing.T) {
 			dataDir := t.TempDir()
 			if err := os.WriteFile(filepath.Join(dataDir, "bootstrap.json"), []byte(`{"version":1,"workspace":"`+workspace+`"}`), 0600); err != nil {
@@ -119,6 +120,33 @@ func TestResolveKEK(t *testing.T) {
 	}
 	if !bytes.Equal(reused, key) {
 		t.Fatal("generated KEK was not reused")
+	}
+}
+
+func TestResolveKEKReusesGeneratedKeyAfterBootstrapFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	first, err := ResolveKEK(Config{DataDir: dataDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dataDir, "kek")
+	before, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, rollback, err := CreateWorkspace(context.Background(), dataDir, "bad/name"); err == nil || rollback != nil {
+		t.Fatal("simulated bootstrap workspace creation failure did not fail")
+	}
+	retry, err := ResolveKEK(Config{DataDir: dataDir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, retry) || !bytes.Equal(before, after) {
+		t.Fatal("retry did not reuse the durable generated KEK")
 	}
 }
 

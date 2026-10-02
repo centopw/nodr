@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/secrets"
@@ -58,11 +59,10 @@ func LoadState(dataDir string) (State, error) {
 }
 
 func validStateWorkspace(workspace string) bool {
-	if filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace {
+	if filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace || filepath.Dir(workspace) != "workspaces" {
 		return false
 	}
-	rel, err := filepath.Rel("workspaces", workspace)
-	return err == nil && rel != "." && rel != ".." && !filepath.IsAbs(rel) && rel != "" && rel[:min(len(rel), 3)] != ".."+string(filepath.Separator)
+	return ValidateName(filepath.Base(workspace)) == nil
 }
 
 // WriteState atomically persists state with restrictive permissions.
@@ -140,6 +140,15 @@ func ResolveKEK(cfg Config, warning io.Writer) ([]byte, error) {
 		return nil, fmt.Errorf("bootstrap: create data root: %w", err)
 	}
 	path := filepath.Join(dataDir, "kek")
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: open KEK lock: %w", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("bootstrap: lock KEK: %w", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if key, err := secrets.LoadKEK(secrets.KEKConfig{FilePath: path}); err == nil {
 		return key, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -149,26 +158,29 @@ func ResolveKEK(cfg Config, warning io.Writer) ([]byte, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("bootstrap: generate KEK: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if errors.Is(err, os.ErrExist) {
-		return secrets.LoadKEK(secrets.KEKConfig{FilePath: path})
-	}
+	file, err := os.CreateTemp(dataDir, ".kek-*")
 	if err != nil {
-		return nil, fmt.Errorf("bootstrap: create KEK: %w", err)
+		return nil, fmt.Errorf("bootstrap: create KEK temp: %w", err)
+	}
+	temp := file.Name()
+	defer os.Remove(temp)
+	if err := file.Chmod(0600); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("bootstrap: chmod KEK temp: %w", err)
 	}
 	if _, err := file.Write(key); err != nil {
 		file.Close()
-		os.Remove(path)
-		return nil, err
+		return nil, fmt.Errorf("bootstrap: write KEK: %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		os.Remove(path)
-		return nil, err
+		return nil, fmt.Errorf("bootstrap: sync KEK: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		os.Remove(path)
-		return nil, err
+		return nil, fmt.Errorf("bootstrap: close KEK: %w", err)
+	}
+	if err := os.Rename(temp, path); err != nil {
+		return nil, fmt.Errorf("bootstrap: rename KEK: %w", err)
 	}
 	if warning != nil {
 		fmt.Fprintf(warning, "generated KEK at %s; back it up before moving or restoring the data directory: losing it makes encrypted credentials unrecoverable\n", path)
