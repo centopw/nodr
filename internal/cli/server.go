@@ -82,6 +82,17 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 	if len(missing) != 0 && len(missing) != len(bootstrapEnvironment) {
 		return fmt.Errorf("bootstrap environment missing: %s", strings.Join(missing, ", "))
 	}
+	state, err := bootstrap.LoadState(dataDir)
+	if err == nil {
+		kek, err := bootstrap.ResolveKEK(config, a.stderr)
+		if err != nil {
+			return err
+		}
+		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if len(missing) == 0 {
 		kek, err := bootstrap.ResolveKEK(config, a.stderr)
 		if err != nil {
@@ -96,17 +107,6 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 			return err
 		}
 		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek)
-	}
-	state, err := bootstrap.LoadState(dataDir)
-	if err == nil {
-		kek, err := bootstrap.ResolveKEK(config, a.stderr)
-		if err != nil {
-			return err
-		}
-		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek)
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	entries, readErr := os.ReadDir(filepath.Join(dataDir, "workspaces"))
 	if readErr == nil && len(entries) != 0 {

@@ -215,6 +215,38 @@ func TestServerCompletesUnattendedBootstrap(t *testing.T) {
 	}
 }
 
+func TestServerReloadsCompletedUnattendedBootstrapWithEnvironment(t *testing.T) {
+	dataDir := t.TempDir()
+	oldGit := bootstrap.GitExecutable
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
+	t.Setenv("NODR_BOOTSTRAP_WORKSPACE_NAME", "unattended")
+	t.Setenv("NODR_BOOTSTRAP_ADMIN_USERNAME", "admin")
+	t.Setenv("NODR_BOOTSTRAP_ADMIN_PASSWORD", strings.Repeat("p", 16))
+	t.Setenv("NODR_BOOTSTRAP_TOKEN", strings.Repeat("t", 32))
+
+	for attempt := range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		var stdout, stderr bytes.Buffer
+		code := Run(ctx, nil, []string{"server", "--data-dir", dataDir, "--addr", "127.0.0.1:0"}, strings.NewReader(""), &stdout, &stderr)
+		cancel()
+		if code != exitOK {
+			t.Fatalf("attempt %d exit = %d, stderr = %s", attempt+1, code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "listening on") {
+			t.Fatalf("attempt %d stdout = %q, want recorded server startup", attempt+1, stdout.String())
+		}
+	}
+
+	state, err := bootstrap.LoadState(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, state.Workspace, ".nodr", "authn.db")); err != nil {
+		t.Fatalf("workspace auth database = %v", err)
+	}
+}
+
 func TestServerBrowserBootstrapInvalidKEKFailsBeforeListen(t *testing.T) {
 	kekFile := filepath.Join(t.TempDir(), "invalid-kek")
 	if err := os.WriteFile(kekFile, []byte("not a key"), 0600); err != nil {
