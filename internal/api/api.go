@@ -43,7 +43,8 @@ func Handler(ctx context.Context, root string, auth *authn.Store, secretsStore *
 }
 
 // HandlerWithoutSetup returns the ordinary workspace API after first-run setup
-// has completed. It deliberately omits setup routes so setup cannot repeat.
+// has completed. It omits POST /setup so setup cannot repeat, but keeps the
+// public GET /setup/status probe the SPA uses to choose login over setup.
 func HandlerWithoutSetup(ctx context.Context, root string, auth *authn.Store, secretsStore *secrets.Store) http.Handler {
 	return handler(ctx, root, auth, secretsStore, false)
 }
@@ -73,8 +74,8 @@ func handler(ctx context.Context, root string, auth *authn.Store, secretsStore *
 	public.HandleFunc("POST "+apiPrefix+"/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		authn.LoginHandler(auth, apiPrefix+"/auth/login").ServeHTTP(w, r)
 	})
+	public.Handle("GET "+apiPrefix+"/setup/status", authn.SetupStatusHandler(auth))
 	if setup {
-		public.Handle("GET "+apiPrefix+"/setup/status", authn.SetupStatusHandler(auth))
 		public.Handle("POST "+apiPrefix+"/setup", authn.SetupHandler(auth))
 	}
 
@@ -85,8 +86,8 @@ func handler(ctx context.Context, root string, auth *authn.Store, secretsStore *
 
 	root2 := http.NewServeMux()
 	root2.Handle("POST "+apiPrefix+"/auth/login", public)
+	root2.Handle("GET "+apiPrefix+"/setup/status", public)
 	if setup {
-		root2.Handle("GET "+apiPrefix+"/setup/status", public)
 		root2.Handle("POST "+apiPrefix+"/setup", public)
 	}
 	root2.Handle("/", authn.Middleware(auth)(protected))

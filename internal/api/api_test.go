@@ -1498,6 +1498,39 @@ func TestSetupStatus_PublicNoAuthRequired(t *testing.T) {
 	}
 }
 
+func TestHandlerWithoutSetup_StatusStaysPublicAndSetupIsGone(t *testing.T) {
+	root := testWorkspace(t)
+	dir := t.TempDir()
+	authStore, err := authn.Open(filepath.Join(dir, "authn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { authStore.Close() })
+	if err := authStore.CreateAccount(t.Context(), "admin", "test-password-123"); err != nil {
+		t.Fatal(err)
+	}
+	handler := HandlerWithoutSetup(t.Context(), root, authStore, nil)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, apiPrefix+"/setup/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup/status = %d, want 200 so the SPA can choose login over setup; body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Initialized bool `json:"initialized"`
+	}
+	decodeResponse(t, rec, &body)
+	if !body.Initialized {
+		t.Error("initialized = false, want true")
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, apiPrefix+"/setup", strings.NewReader(`{}`)))
+	if rec.Code == http.StatusOK || rec.Code == http.StatusForbidden {
+		t.Fatalf("POST /setup = %d, want it unrouted (401/404/405)", rec.Code)
+	}
+}
+
 func TestSetup_PublicNoAuthRequired_RejectedWhenAlreadyInitialized(t *testing.T) {
 	root := testWorkspace(t)
 	handler := testHandler(t, root)
