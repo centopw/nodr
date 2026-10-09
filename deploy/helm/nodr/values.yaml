@@ -31,22 +31,34 @@ resources:
   limits:
     memory: 256Mi
 
-# KEK and the one-time bootstrap token. Leave empty to create a Secret from
-# existingSecret, or set bootstrapToken to have the chart generate a Secret.
+# Secret material. Leave every value empty to finish setup in the browser;
+# the one-time token is printed to the pod log (kubectl logs). The chart never
+# supplies default credentials.
+#
+# Unattended bootstrap is all-or-none: set all four of bootstrap.* or none.
+# Supplying some of them makes the pod exit before it listens. Prefer
+# existingSecret populated by your secret manager over literal values here.
 secret:
-  # Name of an existing Secret with nodr-kek (and optional nodr-bootstrap-token).
+  # Name of an existing Secret. Keys: nodr-kek, nodr-bootstrap-workspace-name,
+  # nodr-bootstrap-admin-username, nodr-bootstrap-admin-password,
+  # nodr-bootstrap-token. Missing keys are treated as unset.
   existingSecret: ""
-  # Used only when existingSecret is empty.
+  # Used only when existingSecret is empty. Base64-encoded 32-byte KEK; leave
+  # empty to let nodr generate one under the data volume.
   kek: ""
-  bootstrapToken: ""
+  bootstrap:
+    workspaceName: ""
+    adminUsername: ""
+    adminPassword: ""
+    token: ""
 
-# The workspace must already be a valid nodr workspace. nodr never
-# initializes one; place a complete workspace (nodr.yaml plus git history)
-# in the volume before starting.
-workspace:
+# Persistent data directory mounted at /var/lib/nodr. It holds bootstrap
+# state, the Git workspace nodr creates on first start, and the generated KEK
+# when no KEK is configured. Back it up with the Git history.
+data:
+  # Existing PVC to reuse. When set, create is ignored.
   existingClaim: ""
-  # When existingClaim is empty and create true, a PVC is created; the
-  # workspace still has to be provisioned into it.
-  create: false
+  # Create a PVC named <release>-data when existingClaim is empty.
+  create: true
   size: 1Gi
   storageClass: ""

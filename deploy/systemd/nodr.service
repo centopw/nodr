@@ -8,17 +8,22 @@ Wants=network-online.target
 Type=simple
 User=nodr
 Group=nodr
+# The bootstrap ledger commit needs an author identity. Override these to
+# record your own.
+Environment=GIT_AUTHOR_NAME=nodr GIT_AUTHOR_EMAIL=nodr@localhost GIT_COMMITTER_NAME=nodr GIT_COMMITTER_EMAIL=nodr@localhost
 EnvironmentFile=/etc/nodr/nodr.env
-ExecStart=/usr/local/bin/nodr -w ${NODR_WORKSPACE} server --addr ${NODR_ADDR}
+# /var/lib/nodr is created and owned by the nodr user. It holds bootstrap
+# state, bootstrap-created workspaces, and the generated KEK when none is set.
+StateDirectory=nodr
+ExecStart=/usr/local/bin/nodr server --data-dir /var/lib/nodr --addr ${NODR_ADDR}
 Restart=on-failure
 RestartSec=5
 
-# Hardening: the workspace directory is the only writable path.
+# Hardening: the state directory is the only writable path.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=${NODR_WORKSPACE}
 
 [Install]
 WantedBy=multi-user.target

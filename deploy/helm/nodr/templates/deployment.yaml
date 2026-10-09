@@ -28,38 +28,60 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - "server"
-            - "-w"
-            - "/workspace"
+            - "--data-dir"
+            - "/var/lib/nodr"
             - "--addr"
             - "0.0.0.0:8080"
           env:
+            # Every reference is optional. Empty or absent keys leave the
+            # variable unset, so the server uses browser setup (or a generated
+            # KEK when none is set). Supplying only some of the four
+            # NODR_BOOTSTRAP_* keys makes nodr exit before it listens.
             - name: NODR_KEK
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nodr.secretName" . }}
                   key: nodr-kek
-            {{- if or .Values.secret.existingSecret .Values.secret.bootstrapToken }}
+                  optional: true
+            - name: NODR_BOOTSTRAP_WORKSPACE_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nodr.secretName" . }}
+                  key: nodr-bootstrap-workspace-name
+                  optional: true
+            - name: NODR_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nodr.secretName" . }}
+                  key: nodr-bootstrap-admin-username
+                  optional: true
+            - name: NODR_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nodr.secretName" . }}
+                  key: nodr-bootstrap-admin-password
+                  optional: true
             - name: NODR_BOOTSTRAP_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nodr.secretName" . }}
                   key: nodr-bootstrap-token
-            {{- end }}
+                  optional: true
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
           volumeMounts:
-            - name: workspace
-              mountPath: /workspace
+            - name: data
+              mountPath: /var/lib/nodr
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
-        - name: workspace
-          {{- if .Values.workspace.existingClaim }}
+        - name: data
+          {{- if .Values.data.existingClaim }}
           persistentVolumeClaim:
-            claimName: {{ .Values.workspace.existingClaim }}
+            claimName: {{ .Values.data.existingClaim }}
           {{- else }}
           persistentVolumeClaim:
-            claimName: {{ include "nodr.fullname" . }}-workspace
+            claimName: {{ include "nodr.fullname" . }}-data
           {{- end }}
