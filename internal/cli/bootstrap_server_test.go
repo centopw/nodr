@@ -5,8 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,16 +22,13 @@ import (
 	"github.com/centopw/nodr/internal/bootstrap"
 )
 
-func fakeGit(t *testing.T, log string, fail bool) string {
+func fakeGit(t *testing.T, log string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("fake git requires a POSIX shell")
 	}
 	path := filepath.Join(t.TempDir(), "git")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(log) + "\n"
-	if fail {
-		script += "if [ \"$1\" = commit ]; then exit 1; fi\n"
-	}
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +60,35 @@ func (b *synchronizedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.Buffer.String()
+}
+
+// runServerUntilListening runs `nodr server` with args and cancels it once it
+// reports that it is listening, so slow startup (Argon2, race detector) cannot
+// race a fixed lifetime.
+func runServerUntilListening(t *testing.T, args ...string) (code int, stdout string, stderr string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := newSynchronizedBuffer()
+	var errBuf bytes.Buffer
+	exit := make(chan int, 1)
+	go func() {
+		exit <- Run(ctx, nil, args, strings.NewReader(""), out, &errBuf)
+	}()
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case code := <-exit:
+			return code, out.String(), errBuf.String()
+		case <-out.written:
+			if strings.Contains(out.String(), "listening on") {
+				cancel()
+			}
+		case <-timeout:
+			cancel()
+			t.Fatalf("server did not start: stdout = %q", out.String())
+		}
+	}
 }
 
 func TestServerPartialBootstrapEnvironmentFailsBeforeListen(t *testing.T) {
@@ -100,7 +126,7 @@ func TestServerBrowserBootstrapWarnsForNonLoopback(t *testing.T) {
 func TestServerBrowserBootstrapAcceptsGeneratedToken(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
-	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,18 +184,16 @@ func TestServerBrowserBootstrapAcceptsGeneratedToken(t *testing.T) {
 func TestServerReloadsRecordedWorkspace(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
-	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	setupBootstrap(t, dataDir, "recorded")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	var stdout, stderr bytes.Buffer
-	if code := Run(ctx, nil, []string{"server", "--data-dir", dataDir, "--addr", "127.0.0.1:0"}, strings.NewReader(""), &stdout, &stderr); code != exitOK {
-		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	code, stdoutText, stderrText := runServerUntilListening(t, "server", "--data-dir", dataDir, "--addr", "127.0.0.1:0")
+	if code != exitOK {
+		t.Fatalf("exit = %d, stderr = %s", code, stderrText)
 	}
-	if !strings.Contains(stdout.String(), "listening on") {
-		t.Fatalf("stdout = %q, want server startup", stdout.String())
+	if !strings.Contains(stdoutText, "listening on") {
+		t.Fatalf("stdout = %q, want server startup", stdoutText)
 	}
 }
 
@@ -187,25 +211,23 @@ func TestServerRejectsIncompleteWorkspaceDirectory(t *testing.T) {
 func TestServerCompletesUnattendedBootstrap(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
-	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	t.Setenv("NODR_BOOTSTRAP_WORKSPACE_NAME", "unattended")
 	t.Setenv("NODR_BOOTSTRAP_ADMIN_USERNAME", "admin")
 	t.Setenv("NODR_BOOTSTRAP_ADMIN_PASSWORD", strings.Repeat("p", 16))
 	t.Setenv("NODR_BOOTSTRAP_TOKEN", strings.Repeat("t", 32))
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	var stdout, stderr bytes.Buffer
-	if code := Run(ctx, nil, []string{"server", "--data-dir", dataDir, "--addr", "127.0.0.1:0"}, strings.NewReader(""), &stdout, &stderr); code != exitOK {
-		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	code, stdoutText, stderrText := runServerUntilListening(t, "server", "--data-dir", dataDir, "--addr", "127.0.0.1:0")
+	if code != exitOK {
+		t.Fatalf("exit = %d, stderr = %s", code, stderrText)
 	}
 	state, err := bootstrap.LoadState(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Workspace != filepath.Join("workspaces", "unattended") || !strings.Contains(stdout.String(), "listening on") {
-		t.Fatalf("state/stdout = %#v/%q", state, stdout.String())
+	if state.Workspace != filepath.Join("workspaces", "unattended") || !strings.Contains(stdoutText, "listening on") {
+		t.Fatalf("state/stdout = %#v/%q", state, stdoutText)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, ".nodr", "authn.db")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("data root auth database = %v, want not exist", err)
@@ -218,7 +240,7 @@ func TestServerCompletesUnattendedBootstrap(t *testing.T) {
 func TestServerReloadsCompletedUnattendedBootstrapWithEnvironment(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
-	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	t.Setenv("NODR_BOOTSTRAP_WORKSPACE_NAME", "unattended")
 	t.Setenv("NODR_BOOTSTRAP_ADMIN_USERNAME", "admin")
@@ -226,15 +248,12 @@ func TestServerReloadsCompletedUnattendedBootstrapWithEnvironment(t *testing.T) 
 	t.Setenv("NODR_BOOTSTRAP_TOKEN", strings.Repeat("t", 32))
 
 	for attempt := range 2 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		var stdout, stderr bytes.Buffer
-		code := Run(ctx, nil, []string{"server", "--data-dir", dataDir, "--addr", "127.0.0.1:0"}, strings.NewReader(""), &stdout, &stderr)
-		cancel()
+		code, stdoutText, stderrText := runServerUntilListening(t, "server", "--data-dir", dataDir, "--addr", "127.0.0.1:0")
 		if code != exitOK {
-			t.Fatalf("attempt %d exit = %d, stderr = %s", attempt+1, code, stderr.String())
+			t.Fatalf("attempt %d exit = %d, stderr = %s", attempt+1, code, stderrText)
 		}
-		if !strings.Contains(stdout.String(), "listening on") {
-			t.Fatalf("attempt %d stdout = %q, want recorded server startup", attempt+1, stdout.String())
+		if !strings.Contains(stdoutText, "listening on") {
+			t.Fatalf("attempt %d stdout = %q, want recorded server startup", attempt+1, stdoutText)
 		}
 	}
 
@@ -287,7 +306,7 @@ func setupBootstrap(t *testing.T, dataDir, workspace string) {
 func TestServerBootstrapHandlerCutsOverAfterSetup(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
-	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	token := strings.Repeat("t", 32)
 	switcher := &switchingHandler{}
@@ -336,7 +355,7 @@ func TestServerBootstrapHandlerCutsOverAfterSetup(t *testing.T) {
 func TestServerBootstrapHandlerPreparationFailureDoesNotCommitOrSetCookie(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
-	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	token := strings.Repeat("t", 32)
 	prepareErr := errors.New("cannot prepare normal handler")
@@ -377,7 +396,7 @@ func TestServerBootstrapHandlerPreparationFailureDoesNotCommitOrSetCookie(t *tes
 func TestServerBootstrapHandlerSerializesConcurrentSetup(t *testing.T) {
 	dataDir := t.TempDir()
 	oldGit := bootstrap.GitExecutable
-	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"), false)
+	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	token := strings.Repeat("t", 32)
 	entered := make(chan struct{})
@@ -404,7 +423,7 @@ func TestServerBootstrapHandlerSerializesConcurrentSetup(t *testing.T) {
 	go func() { first <- post("first") }()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("first setup did not reach authorization barrier")
 	}
 	second := make(chan int, 1)

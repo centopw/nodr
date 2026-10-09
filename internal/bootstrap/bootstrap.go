@@ -148,7 +148,7 @@ func ResolveKEK(cfg Config, warning io.Writer) ([]byte, error) {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return nil, fmt.Errorf("bootstrap: lock KEK: %w", err)
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 	if key, err := secrets.LoadKEK(secrets.KEKConfig{FilePath: path}); err == nil {
 		return key, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -186,11 +186,4 @@ func ResolveKEK(cfg Config, warning io.Writer) ([]byte, error) {
 		fmt.Fprintf(warning, "generated KEK at %s; back it up before moving or restoring the data directory: losing it makes encrypted credentials unrecoverable\n", path)
 	}
 	return key, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

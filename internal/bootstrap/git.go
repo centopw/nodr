@@ -36,10 +36,12 @@ func (g GitRunner) run(ctx context.Context, root string, args ...string) error {
 // Init initializes the repository at root.
 func (g GitRunner) Init(ctx context.Context, root string) error { return g.run(ctx, root, "init") }
 
+// Add stages the workspace manifest and intent directory.
 func (g GitRunner) Add(ctx context.Context, root string) error {
 	return g.run(ctx, root, "add", "nodr.yaml", "intent")
 }
 
+// Commit records the initial workspace commit.
 func (g GitRunner) Commit(ctx context.Context, root string) error {
 	return g.run(ctx, root, "commit", "-m", "chore: initialize nodr workspace")
 }

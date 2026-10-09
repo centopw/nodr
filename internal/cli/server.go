@@ -217,9 +217,9 @@ func (s *switchingHandler) prepareNormal(ctx context.Context) func(context.Conte
 }
 
 type bootstrapSetup struct {
-	mu       sync.Mutex
-	service  bootstrap.Service
-	token    string
+	mu        sync.Mutex
+	service   bootstrap.Service
+	token     string
 	completed bool
 }
 
