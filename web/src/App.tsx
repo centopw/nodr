@@ -124,11 +124,11 @@ export default function App() {
   }, [selectedWorkspace]);
 
   useEffect(() => {
-    if (!shouldFocusConnectCluster.current || section !== "infrastructure" || infrastructureView !== "list") return;
+    if (!shouldFocusConnectCluster.current || !data || section !== "infrastructure" || infrastructureView !== "list") return;
     shouldFocusConnectCluster.current = false;
     connectClusterRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     connectClusterRef.current?.focus();
-  }, [infrastructureView, section, connectFocusToken]);
+  }, [data, infrastructureView, section, connectFocusToken]);
 
   async function refreshResources() {
     if (!data) return;
@@ -140,9 +140,22 @@ export default function App() {
   function showInfrastructure(view: InfrastructureView = "list") { setSuccess(null); setInfrastructureView(view); setSection("infrastructure"); }
   function showConnectCluster() { shouldFocusConnectCluster.current = true; setConnectFocusToken((token) => token + 1); showInfrastructure(); }
 
+  function completeSetup(workspaceName: string) {
+    void getSession().then((session) => {
+      setUsername(session.username);
+      setSelectedWorkspace(workspaceName);
+      setSuccess(null);
+      setSection("infrastructure");
+      setInfrastructureView("list");
+      shouldFocusConnectCluster.current = true;
+      setConnectFocusToken((token) => token + 1);
+      setAuthPhase("authenticated");
+    }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr."));
+  }
+
   if (loadError) return <main className="app-shell app-shell-centered"><Banner variant="error">{loadError}</Banner></main>;
   if (authPhase === "checking") return <main className="app-shell-centered"><p className="status" role="status">Loading nodr…</p></main>;
-  if (authPhase === "needs-setup") return <SetupForm onSetupComplete={() => { void getSession().then((session) => { setUsername(session.username); setAuthPhase("authenticated"); }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr.")); }} />;
+  if (authPhase === "needs-setup") return <SetupForm onSetupComplete={completeSetup} />;
   if (authPhase === "needs-login") return <LoginForm onLoggedIn={() => { void getSession().then((session) => { setUsername(session.username); setAuthPhase("authenticated"); }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr.")); }} />;
   if (loading || !selectedWorkspace || !data) return <main className="app-shell app-shell-centered"><p className="status" role="status">Loading workspace…</p></main>;
   const environments = Object.keys(data.manifest.environments);
