@@ -311,7 +311,7 @@ func TestServerBootstrapHandlerCutsOverAfterSetup(t *testing.T) {
 	token := strings.Repeat("t", 32)
 	switcher := &switchingHandler{}
 	setup := &bootstrapSetup{
-		service: bootstrap.Service{Config: bootstrap.Config{DataDir: dataDir}, Prepare: switcher.prepareNormal(context.Background())},
+		service: bootstrap.Service{Config: bootstrap.Config{DataDir: dataDir}, Prepare: switcher.prepareNormal(context.Background(), nil)},
 		token:   token,
 	}
 	switcher.handler = bootstrapHandler(setup)
@@ -385,7 +385,7 @@ func TestServerBootstrapHandlerPreparationFailureDoesNotCommitOrSetCookie(t *tes
 		t.Fatalf("failed attempt workspace remains: %v", err)
 	}
 
-	setup.service.Prepare = switcher.prepareNormal(context.Background())
+	setup.service.Prepare = switcher.prepareNormal(context.Background(), nil)
 	rec = httptest.NewRecorder()
 	switcher.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {

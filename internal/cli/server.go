@@ -78,6 +78,13 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 	}
 	config := bootstrap.Config{DataDir: dataDir, KEKFile: kekFile, KEKEnv: kekEnv}
 	dataDir = config.DataRoot()
+	ledgerCfg, err := loadLedgerConfig()
+	if err != nil {
+		return err
+	}
+	if ledgerCfg != nil {
+		fmt.Fprintf(a.stdout, "github ledger enabled; configure the GitHub App webhook URL as %s\n", ledgerCfg.webhookURL())
+	}
 	values, missing := bootstrapEnv()
 	if len(missing) != 0 && len(missing) != len(bootstrapEnvironment) {
 		return fmt.Errorf("bootstrap environment missing: %s", strings.Join(missing, ", "))
@@ -88,7 +95,7 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 		if err != nil {
 			return err
 		}
-		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek)
+		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek, ledgerCfg)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -106,7 +113,7 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 		if err != nil {
 			return err
 		}
-		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek)
+		return a.runRecordedServer(ctx, addr, filepath.Join(dataDir, state.Workspace), kek, ledgerCfg)
 	}
 	entries, readErr := os.ReadDir(filepath.Join(dataDir, "workspaces"))
 	if readErr == nil && len(entries) != 0 {
@@ -128,14 +135,14 @@ func (a *app) runBootstrapServer(ctx context.Context, addr, dataDir, kekFile str
 	fmt.Fprintf(a.stdout, "warning: generated bootstrap token %s; treat it as a secret because anyone with it can create the administrator account\n", token)
 	switcher := &switchingHandler{}
 	setup := &bootstrapSetup{
-		service: bootstrap.Service{Config: config, Prepare: switcher.prepareNormal(ctx)},
+		service: bootstrap.Service{Config: config, Prepare: switcher.prepareNormal(ctx, ledgerCfg)},
 		token:   token,
 	}
 	switcher.handler = bootstrapHandler(setup)
 	return runHandlerServer(ctx, addr, a.stdout, switcher)
 }
 
-func (a *app) runRecordedServer(ctx context.Context, addr, root string, kek []byte) error {
+func (a *app) runRecordedServer(ctx context.Context, addr, root string, kek []byte, ledgerCfg *ledgerConfig) error {
 	authStore, err := authn.Open(filepath.Join(root, ".nodr", "authn.db"))
 	if err != nil {
 		return err
@@ -146,7 +153,12 @@ func (a *app) runRecordedServer(ctx context.Context, addr, root string, kek []by
 		return err
 	}
 	defer secretsStore.Close()
-	return runServer(ctx, root, addr, a.stdout, authStore, secretsStore)
+	handler, closeLedger, err := newHandler(ctx, root, authStore, secretsStore, ledgerCfg, nodrapi.HandlerWithoutSetup)
+	if err != nil {
+		return err
+	}
+	defer closeLedger()
+	return runHandlerServer(ctx, addr, a.stdout, handler)
 }
 
 func bootstrapEnv() (values, missing []string) {
@@ -191,7 +203,7 @@ func (s *switchingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.ServeHTTP(w, r)
 }
 
-func (s *switchingHandler) prepareNormal(ctx context.Context) func(context.Context, string, []byte) (func(), func(), error) {
+func (s *switchingHandler) prepareNormal(ctx context.Context, ledgerCfg *ledgerConfig) func(context.Context, string, []byte) (func(), func(), error) {
 	return func(_ context.Context, root string, kek []byte) (func(), func(), error) {
 		authStore, err := authn.Open(filepath.Join(root, ".nodr", "authn.db"))
 		if err != nil {
@@ -202,13 +214,19 @@ func (s *switchingHandler) prepareNormal(ctx context.Context) func(context.Conte
 			authStore.Close()
 			return nil, nil, err
 		}
-		handler := normalHandler(ctx, root, authStore, secretsStore)
+		handler, closeLedger, err := newHandler(ctx, root, authStore, secretsStore, ledgerCfg, nodrapi.HandlerWithoutSetup)
+		if err != nil {
+			authStore.Close()
+			secretsStore.Close()
+			return nil, nil, err
+		}
 		commit := func() {
 			s.mu.Lock()
 			s.auth, s.secrets, s.handler = authStore, secretsStore, handler
 			s.mu.Unlock()
 		}
 		cleanup := func() {
+			closeLedger()
 			_ = authStore.Close()
 			_ = secretsStore.Close()
 		}
@@ -286,12 +304,28 @@ func bootstrapFieldProblem(w http.ResponseWriter, field string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"type": "about:blank", "title": "Invalid request", "status": http.StatusBadRequest, "invalid-params": []map[string]string{{"name": field, "reason": "invalid value"}}})
 }
 
-func normalHandler(ctx context.Context, root string, auth *authn.Store, secretsStore *secrets.Store) http.Handler {
+// newHandler builds the site handler for an initialized workspace. With a
+// ledger configuration it serves the GitHub-ledger API ahead of the ordinary
+// auth routes and hides the local-workspace routes; the returned func releases
+// the ledger's stores and waits for its in-flight operations.
+func newHandler(ctx context.Context, root string, auth *authn.Store, secretsStore *secrets.Store, ledgerCfg *ledgerConfig, base func(context.Context, string, *authn.Store, *secrets.Store) http.Handler) (http.Handler, func(), error) {
+	api := base(ctx, root, auth, secretsStore)
+	closeLedger := func() {}
+	if ledgerCfg != nil {
+		runtime, err := openLedger(ctx, ledgerCfg, root, auth, secretsStore)
+		if err != nil {
+			return nil, nil, err
+		}
+		api = runtime.handler(legacyWorkspaceAPIGone(api))
+		closeLedger = runtime.Close
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/api/", nodrapi.HandlerWithoutSetup(ctx, root, auth, secretsStore))
-	mux.Handle("/api", nodrapi.HandlerWithoutSetup(ctx, root, auth, secretsStore))
+	mux.Handle("/api/", api)
+	mux.Handle("/api", api)
+	mux.Handle("/healthz", api)
+	mux.Handle("/readyz", api)
 	mux.Handle("/", webui.Handler())
-	return mux
+	return mux, closeLedger, nil
 }
 
 func runHandlerServer(ctx context.Context, addr string, stdout io.Writer, handler http.Handler) error {
