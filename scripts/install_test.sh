@@ -15,7 +15,7 @@ SHASUM_BIN="$TMP/shasum-bin"
 mkdir -p "$FIXTURE" "$BIN" "$PREFIX"
 mkdir -p "$NO_CHECKSUM_BIN"
 mkdir -p "$SHASUM_BIN"
-for command in awk basename cp dirname grep install mkdir mktemp rm tar; do
+for command in awk basename cp dirname grep gzip install mkdir mktemp rm sed tar; do
   command_path="$(command -v "$command")"
   ln -s "$command_path" "$NO_CHECKSUM_BIN/$command"
   ln -s "$command_path" "$SHASUM_BIN/$command"
