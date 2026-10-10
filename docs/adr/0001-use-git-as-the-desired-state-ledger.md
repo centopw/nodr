@@ -15,12 +15,19 @@ disaster recovery must not depend on one database.
 
 ## Decision
 
-All desired state of a workspace lives in one Git repository: intent
-documents, engine code, automation definitions and allocations. Every change,
-whether it comes from the GUI, the API, the CLI or a push, is a commit. Change
-sets are branches. Applying a change set squash-merges it into `main`. The
-database holds only operational data (runs, schedules, audit, inventory) and
-indexes that can be rebuilt from Git. Ref updates are compare-and-swap.
+All desired state of a workspace lives in one GitHub-connected repository:
+intent documents, engine code, render locks, automation definitions and
+allocations. Every hosted UI or API mutation will create a commit on a draft
+branch; applying a reviewed change set will merge that draft into the default
+branch. Git refs are advanced with compare-and-swap. SQLite will hold only
+operational data (users, sessions, workspace metadata, webhook delivery
+de-duplication, operations, artifacts and rebuildable indexes).
+
+The target integration is a server-side GitHub App. Its short-lived
+installation tokens and signed webhook secrets are never stored in Git. UI
+writes and eligible signature-verified pushes will enter the same idempotent
+sync pipeline. This is a proposed migration contract; it does not state that
+the current local-workspace implementation has already been removed.
 
 ## Consequences
 

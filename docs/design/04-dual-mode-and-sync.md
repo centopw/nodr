@@ -6,52 +6,37 @@ This chapter describes how nodr lets people manage the same infrastructure
 through a GUI and through code at the same time, and how it keeps the two
 consistent without silently overwriting anyone's work.
 
-## 4.1 Management modes
+## 4.1 M0 management surfaces
 
-| Mode | Audience | What it offers |
-| ---- | -------- | -------------- |
-| **Simple Mode** | Beginners, IT generalists, quick tasks | Dashboards, wizards, forms with `basic` and `standard` fields, plain-language plans, one-click policies. Code stays out of sight, but every object has a "View code" link. |
-| **Advanced Mode** | Power users, DevOps engineers | Every field tier, the in-browser IDE, raw intent YAML, custom code, bindings, policies, the API explorer. |
-| **Split view** | Anyone learning or reviewing | A form next to the code it generates, updating live, with two-way highlighting: focusing a field highlights its code, and moving the cursor in code highlights the matching field. |
+M0 administrators and users manage nodr in the browser. One-time setup is at
+`/setup` and consumes a deployment-supplied bootstrap secret; connecting a
+repository uses a server-side GitHub App installation. The HTTP API is the
+automation surface. Neither flow requires an end-user CLI, shell, local KEK
+generation, or mutable local workspace.
 
-Modes are a presentation preference, not a permission. Permissions such as
-`intent:write` and `code:write` decide what a user may change
-([§10.4](10-security.md#104-authorization)). A beginner in Simple Mode and a
-developer in Advanced Mode can edit the same resource at the same time, and the
-rules in this chapter keep their work consistent.
+The existing local CLI/editor and Git transport descriptions in this document
+are migration-deprecated: they describe implementation being replaced, not an
+M0 product promise. M0 supports external code changes through GitHub pushes,
+not Git smart HTTP or a terminal command surface.
 
-## 4.2 Advanced Mode in the browser
+## 4.2 One synchronization pipeline
 
-Advanced Mode is a lightweight IDE for the workspace repository:
+Every repository change enters `Synchronize` after checkout in an isolated
+operation worktree. UI/API commands first create or update a `nodr/drafts/`
+ref from the supplied base SHA; signed GitHub push webhooks fetch the mirror
+and follow the same path. The server persists the GitHub delivery ID before
+work, so retries return success without synchronizing twice.
 
-- **File tree with ownership badges.** Each file shows whether it is managed,
-  managed with customizations, or user-owned.
-- **Editor with language intelligence.** Monaco with language servers over
-  WebSocket: terraform-ls for HCL, yaml-language-server with nodr, Compose and
-  Kubernetes schemas, the Ansible language server, and a nodr grammar and
-  checker for UCI files. Language servers run in per-session sandboxes on a
-  runner.
-- **Ownership decorations.** A CodeLens above each managed block ("Managed by
-  nodr · vm/web-01 · 2 customizations · Open in GUI") and gutter markers that
-  show whether each attribute is synced, code-owned or an extension.
-- **Diagnostics as you type and on save.** Syntax, schema, `tofu validate`,
-  `ansible-lint`, policy rules and secret scanning.
-- **Review panes.** "My customizations" (working code compared with pristine
-  output), "What will change" (compared with `main`), the engine plan, run logs,
-  Git history and blame.
-- **Drafts.** Saving commits to the current change-set branch. Applying a
-  change set squash-merges it into `main` as one commit with a structured
-  message. Draft branches are kept for audit for a configurable period.
-- **Formatting.** `tofu fmt` for HCL and canonical formatting for YAML and UCI
-  on save.
+Only pushes to a linked workspace's default branch or `nodr/drafts/` ref are
+eligible. A default-branch push creates a server-owned `sync/<short-sha>`
+draft for the synchronization result; it does not rewrite the default branch.
+Draft-push results commit back to that draft. The last processed remote SHA is
+persisted only after completion or after committing a conflict draft.
 
-There is no interactive shell in the browser. Commands run as audited actions
-(validate, plan, apply) in runner sandboxes ([§10.7](10-security.md#107-runner-isolation-and-code-execution)).
-
-People who prefer their own editor clone the workspace over Git. The `nodr`
-CLI runs the same sync and validation locally (`nodr sync --local`,
-`nodr validate`), and every push goes through the same pipeline as an edit in
-the browser, including the engine plan.
+Both sources use render-lock mapping, lift, ownership classification and
+three-way regeneration. A malformed/missing lock mapping, ownership conflict,
+merge conflict or failed lens round-trip leaves source files untouched and
+returns a diagnostic location for browser review.
 
 ## 4.3 The synchronization problem
 
@@ -276,43 +261,29 @@ openwrt/**         merge=nodr-uci
 Without the drivers Git falls back to line merges, which work in the common
 case, and the next sync verifies the result either way.
 
-## 4.7 Sync pipeline
-
-Sync runs on every change, whatever its source: a GUI or API command, an
-editor save, a push to nodr's Git endpoint, or a new commit on an external
-remote (webhook or polling).
+## 4.7 M0 synchronization algorithm
 
 ```text
-sync(draft, commit C):
-  changedIntent, changedCode := diff(parent(C), C)
-
-  # 1. Code to intent
-  for each changed file f in changedCode:
-      tree := parse(f)                      # syntax errors keep the draft unappliable
-      for each managed block b in tree:
-          r := resolve(b)                   # marker, render.lock, uid
-          values, ownership := lens(r, b).lift(b)
-          patch := diff(syncedFields(intent[r]), values)
-          if patch and changedIntent set the same field to different values:
-              recordConflict(r, field)      # see 4.8
-          else:
-              intent[r] := apply(intent[r], patch)
-      mark new blocks without provenance as user-owned
-      mark removed managed blocks as pending deletions
-
-  # 2. Intent to code
-  admitted := admission(intent)             # defaults, allocations, validation, policy
-  newPristine := render(admitted)           # pure and deterministic
-  code := merge3(base: pristine(parent(C)), ours: code, theirs: newPristine)
-
-  # 3. Verify
-  check stability and fidelity for every touched block
-  on failure: demote the affected fields to code-owned and report
-
-  # 4. Record
-  commit changed intent, code and render.lock as a sync commit on the draft
-  set refs/nodr/pristine/<draft> to newPristine
+synchronize(checkout, baseSHA):
+  verify managed-block marker and .nodr/render.lock mapping
+  lift literal code edits into matching intent fields
+  classify expressions, keep literals, dynamic blocks and unknown attributes
+    as code-owned or extensions
+  reject a UI write to a code-owned field with an ownership conflict
+  render canonical managed output
+  merge old pristine, checked-out code and new pristine only in managed blocks
+  on a clean result, commit intent, code, render.lock and pristine ref together
+  otherwise leave source unchanged and record a conflict draft with locations
 ```
+
+The expected HEAD is an ETag. A UI/API mutation passes it in `If-Match`; the
+repository advances the draft ref by CAS and returns `412 Precondition Failed`
+when it is stale. A successful commit is the only durable acknowledgment.
+
+`.nodr/render.lock` is committed in Git. For each M0 VM managed block it holds
+the UID, resource reference, `provision` aspect, `opentofu` engine, relative
+file, HCL address, renderer identifier and pristine hash. A missing or
+mismatched entry is a conflict; nodr must not guess from labels alone.
 
 Properties:
 

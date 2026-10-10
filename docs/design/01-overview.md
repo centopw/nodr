@@ -25,56 +25,46 @@ end up with configuration drift they cannot see.
 
 ## 1.2 Vision
 
-**Click or code: one infrastructure, one source of truth.**
+**One browser-managed control plane, with Git as the desired-state ledger.**
 
-nodr is a web GUI and an IaC platform at the same time:
+nodr is installed on a dedicated VPS. Administrators complete one-time browser
+setup, connect a repository through a GitHub App, create draft changes, review
+plans, and apply reviewed revisions. GitHub repositories hold desired state;
+the VPS database holds only operational state. Every UI change becomes a Git
+commit and every eligible signed GitHub push enters the same sync pipeline.
 
-- Every GUI action becomes a reviewable change to standard, readable code in Git.
-- Every code change, whether made in the built-in editor or pushed from a
-  laptop, shows up in the GUI.
-- Every change is carried out by standard tools: OpenTofu or Terraform,
-  Ansible, OpenWrt UCI, Kubernetes and Docker Compose.
-- Changes made outside nodr, such as a quick edit in the Proxmox UI, are
-  detected and can be reverted or adopted.
-
-A beginner can run a backed-up, patched homelab without ever opening the code
-view. A power user can treat nodr as a GitOps control plane and never touch the
-GUI. Both can work on the same infrastructure at the same time.
+The browser is the M0 end-user administration surface. The HTTP API remains
+available for automation under the same commit, concurrency, review and apply
+rules. Current local-workspace CLI paths are migration-deprecated documentation
+and implementation, not a supported administrator workflow.
 
 ## 1.3 Goals
 
 | ID  | Goal |
 | --- | ---- |
-| G1  | Keep all desired state in Git, whether it was created through the GUI, the code editor, the API, the CLI or an import. |
-| G2  | Synchronize GUI and code in both directions with explicit, field-level ownership, so that nothing is silently overwritten. |
-| G3  | Manage the full Proxmox VE lifecycle, from a single node to a multi-node high-availability (HA) cluster, including VMs and LXC containers from creation to decommissioning. |
-| G4  | Provide built-in scheduling for maintenance (updates, restarts, backups, snapshots, firmware and cluster upgrades) with safety rails such as pre-change snapshots, health checks and maintenance windows. |
-| G5  | Manage OpenWrt routing and networking with connectivity-safe apply, and define networks once for routers, hypervisors and clusters. |
-| G6  | Treat Docker, K3s and Kubernetes environments as first-class resources, provisioned end to end. |
-| G7  | Keep the intent model tool-neutral so the engine behind a resource (Terraform, Ansible, native API) can be switched without changing infrastructure. |
-| G8  | Avoid lock-in: generated code is idiomatic, human-readable and runnable without nodr. |
-| G9  | Use progressive disclosure: defaults are enough for beginners, and experts can reach every setting. |
-| G10 | Stay light enough for homelab hardware: the control plane idles in at most 512 MiB of RAM on one vCPU. |
+| G1  | Keep all desired state in a GitHub repository; Git history and refs are authoritative. |
+| G2  | Provide browser-only setup and administration on one dedicated VPS, with a one-time bootstrap token. |
+| G3  | Synchronize browser drafts and signed GitHub pushes through one field-ownership pipeline without silent overwrite. |
+| G4  | Retain an HTTP API for automation; it uses the same draft, CAS and saved-plan rules as the browser. |
+| G5  | Deliver M0 Proxmox VM management with isolated OpenTofu execution. |
+| G6  | Keep intent tool-neutral and generated code readable and portable. |
 
 ## 1.4 Non-goals
 
 | ID | Non-goal | Rationale |
 | -- | -------- | --------- |
-| N1 | Public-cloud management (AWS, Azure, GCP) in v1 | The plugin model allows it later; v1 focuses on self-hosted infrastructure. |
-| N2 | Replacing monitoring stacks | nodr runs the health checks its own workflows need and integrates with Prometheus, Grafana and Uptime Kuma instead of rebuilding them. |
-| N3 | General-purpose CI/CD for application code | nodr deploys infrastructure and packaged applications, not source code pipelines. |
-| N4 | Re-implementing every vendor GUI feature | Low-level diagnostics (SMART data, Ceph internals, packet captures) deep-link to the vendor UI. |
-| N5 | Hosted multi-tenant SaaS | nodr is self-hosted. Managed service providers are supported through multiple workspaces in one installation. |
-| N6 | Presenting arbitrary code in the GUI | Code that the GUI cannot represent faithfully stays code and is shown as code, instead of being approximated in a form. |
+| N1 | Terminal CLI or shell setup for administrators/users in M0 | Browser setup and the API are the supported hosted surfaces. |
+| N2 | Kubernetes, HA, OIDC, remote runners, Git smart HTTP or other forge integrations in M0 | These are later milestones, not partially exposed M0 features. |
+| N3 | Hosted multi-tenant SaaS | nodr is a self-hosted VPS control plane. |
+| N4 | Presenting arbitrary code in forms | Code the GUI cannot represent faithfully remains code-owned. |
 
 ## 1.5 Personas
 
 | Persona | Context | What they need from nodr |
 | ------- | ------- | ------------------------ |
-| **P1 Homelab beginner** | One Proxmox node, a consumer router flashed with OpenWrt. Wants Home Assistant, a DNS ad-blocker and a media server. | Wizards and defaults, backups and updates that just happen, a clear warning before anything risky. No need to learn Terraform. |
-| **P2 Homelab power user** | Three-node Proxmox cluster with Ceph, K3s, VLANs, their own Terraform modules. | GitOps, full access to every Proxmox and OpenWrt setting, editable code, API and CLI, no lock-in. |
-| **P3 SME IT generalist** | One to three people running IT for a 20 to 200 person company. | Reliable backups with restore tests, patching with approvals, an audit trail, low day-to-day effort. |
-| **P4 DevOps engineer or MSP technician** | Several sites or customers, strong IaC background. | Multiple workspaces, pull-request workflows, RBAC, remote runners, automation through the API. |
+| **P1 Administrator** | Deploys nodr on a dedicated VPS for a homelab or small organization. | Browser setup, a one-time bootstrap secret, GitHub App connection, and no shell-based account provisioning. |
+| **P2 Operator** | Reviews inventory and performs authorized infrastructure work. | Browser drafts, visible plans, explicit apply and safe ownership conflicts. |
+| **P3 Automation author** | Integrates existing tooling. | Stable HTTP API semantics without an interactive CLI dependency. |
 
 ## 1.6 Key scenarios
 
@@ -96,24 +86,22 @@ These scenarios drive the design and become end-to-end acceptance tests
 
 ## 1.7 Design principles
 
-1. **Git is the ledger.** Every change to desired state is a commit. History,
-   diff, review and revert come for free.
-2. **One model, many views.** The GUI, the code, the API and the CLI are
-   projections of the same model. The GUI has no private capabilities.
-3. **Explicit ownership.** Every setting has exactly one owner at any time.
-   Conflicts are shown to a person and never resolved silently.
-4. **Plan before apply.** Every change produces a preview in plain language
-   before anything touches infrastructure.
-5. **Safe by default.** Protection flags, pre-change snapshots,
-   connectivity-safe network changes and tested rollback paths are on by
-   default.
-6. **Standard tools, idiomatic output.** Execution uses established tools, and
-   generated code looks like a careful engineer wrote it.
-7. **Native first.** When a platform has a more resilient built-in mechanism
-   (Proxmox backup jobs, K3s etcd snapshots, OpenWrt apply with rollback),
-   nodr configures that mechanism instead of reinventing it.
-8. **Progressive disclosure.** Simple by default, complete on demand.
-9. **Small footprint.** Homelab hardware is the baseline, not an afterthought.
+1. **Git is the ledger.** Desired state changes are durable only after a
+   compare-and-swap Git ref update succeeds.
+2. **Browser for people; API for automation.** M0 has no end-user CLI or shell
+   setup path. Existing local CLI paths are migration-deprecated until replaced.
+3. **One synchronization pipeline.** UI commits and signature-verified GitHub
+   pushes are idempotently reconciled by the same ownership-aware sync path.
+4. **SQLite is operational, not desired-state authority.** It stores users,
+   metadata, delivery de-duplication, operations and artifacts for one VPS.
+5. **Plan before apply.** A saved plan is bound to one draft HEAD and is
+   applied only after that exact reviewed revision is merged.
+6. **Explicit ownership.** Conflicts and code-owned fields are shown, never
+   silently overwritten.
+7. **Separate control plane and runner.** M0 deploys distinct OCI services;
+   the runner's concrete internal job protocol remains an implementation gate.
+8. **Small, concrete M0.** GitHub App, Proxmox VMs, SQLite and one VPS precede
+   HA, OIDC, Kubernetes and remote runners.
 
 ## 1.8 Requirements traceability
 
