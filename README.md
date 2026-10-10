@@ -92,6 +92,30 @@ The server binds loopback by default and speaks plain HTTP — terminate TLS
 in a reverse proxy. The [production guide](docs/guides/production.md) covers
 systemd, Docker, Compose, Helm, backups, and upgrades in full.
 
+## GitHub ledger workflow
+
+With the GitHub App configured (see the
+[production guide](docs/guides/production.md#13-github-backed-ledger-optional)),
+a connected repository is the desired-state ledger:
+
+1. Sign in, then connect a repository that contains `nodr.yaml` from the
+   browser. The server verifies access and the manifest.
+2. Each change is a command that commits to a draft ref
+   (`refs/heads/nodr/drafts/<id>`), never to the default branch. Mutations carry
+   the draft HEAD as `If-Match`; a stale value returns `412` and a repeated
+   `Idempotency-Key` returns the recorded result without a second commit.
+3. Plan records a saved plan for the exact draft SHA. Apply accepts only that
+   plan, promotes the reviewed draft to the default branch once, and then runs
+   it. A changed draft returns `409 PLAN_CHANGED`.
+4. Signed GitHub push webhooks refresh the mirror and, when generated code no
+   longer matches intent on the default branch, open a server-owned sync
+   changeset.
+
+A connected repository holds `nodr.yaml`, YAML intent below `intent/`, and
+generated OpenTofu below `terraform/`. OpenTofu currently runs in-process on the
+control-plane host, and saved plans are kept in memory, so after a restart you
+plan again before applying.
+
 ## Features
 
 - **Browser and API over one model** — the dashboard dispatches the same typed
