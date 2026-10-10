@@ -399,16 +399,15 @@ func TestServerBootstrapHandlerSerializesConcurrentSetup(t *testing.T) {
 	bootstrap.GitExecutable = fakeGit(t, filepath.Join(t.TempDir(), "git.log"))
 	t.Cleanup(func() { bootstrap.GitExecutable = oldGit })
 	token := strings.Repeat("t", 32)
-	entered := make(chan struct{})
+	// entered is buffered so the barrier signal is never dropped when the
+	// setup goroutine arrives before the test starts waiting.
+	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
 	service := bootstrap.Service{
 		Config: bootstrap.Config{DataDir: dataDir},
 		SetupAuth: func(ctx context.Context, store *authn.Store, request bootstrap.Request) (string, string, time.Time, error) {
-			select {
-			case entered <- struct{}{}:
-				<-release
-			default:
-			}
+			entered <- struct{}{}
+			<-release
 			return store.Setup(ctx, request.Token, request.Username, request.Password)
 		},
 	}
