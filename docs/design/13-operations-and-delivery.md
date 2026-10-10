@@ -16,33 +16,42 @@
 | Accessibility | WCAG 2.2 level AA. |
 | Security | As in [§10](10-security.md). |
 
-## 13.2 Packaging and installation
+## 13.2 M0 VPS deployment
 
-| Artifact | Contents | Use |
-| -------- | -------- | --- |
-| `nodr` OCI image | The server binary on a distroless base | All topologies |
-| `nodr-runner` OCI image | Runner binary, OpenTofu, `ansible-core` with `ansible-runner`, kubectl, Helm, Docker CLI with Compose, OpenSSH, Python | Job sandboxes |
-| Proxmox LXC appliance | A script that creates an unprivileged container with nodr and nested container support for sandboxes | The most common homelab install |
-| Compose file | Server with embedded runner | Docker hosts |
-| Helm chart | HA deployment | SMEs running Kubernetes |
+M0 deploys to one dedicated VPS behind a TLS-terminating reverse proxy. It has
+two separate OCI images/services:
 
-| Topology | Minimum resources |
-| -------- | ----------------- |
-| All-in-one | 1 vCPU, 1 GiB RAM (2 GiB recommended, because the embedded runner also executes jobs), 10 GiB disk |
-| SME HA | Two replicas with 2 vCPUs and 2 GiB each, PostgreSQL, S3-compatible storage, runners with 2 vCPUs and 4 GiB each |
+| Service | Responsibility |
+| ------- | -------------- |
+| Control plane | Go server, embedded React UI, SQLite, repository mirrors, encrypted secrets and operation artifacts |
+| Runner | Isolated OpenTofu execution for control-plane-owned jobs |
 
-The first-run wizard is described in [§12.4](12-user-experience.md#124-key-flows).
+The control-plane data directory is persistently mounted (for example,
+`/var/lib/nodr`). Deployment supplies `NODR_BOOTSTRAP_TOKEN`, `NODR_KEK`,
+`NODR_GITHUB_APP_ID`, `NODR_GITHUB_PRIVATE_KEY_FILE`,
+`NODR_GITHUB_WEBHOOK_SECRET`, and `NODR_PUBLIC_URL` through environment or
+mounted secrets. No deployment step requires an administrator CLI command,
+local KEK generation, or a user-managed workspace directory.
 
-## 13.3 Running nodr in production
+Before browser setup, an operator prepares DNS/TLS, configures a GitHub App and
+its public HTTPS webhook URL, deploys the two services, then opens `/setup`.
+The GitHub App requires repository contents read/write, metadata read, commit
+statuses read/write, pull requests read/write, and webhook access. Without
+public signed-webhook ingress, readiness fails: M0 must not run as an
+undocumented one-way UI-to-Git system.
 
-- **Leader election** for singleton duties uses a lease row in the database
-  with a fencing token. A former leader that resumes after a pause cannot act
-  on a stale lease.
-- **Git authority.** The HA topology requires an external Git server as the
-  authoritative repository ([§2.6](02-architecture.md#26-process-model-and-deployment-topologies)).
-- **Runner pools.** Runners carry labels (`site`, `capability`). Each runner
-  runs four concurrent jobs by default. An OpenTofu job needs roughly 200 to
-  500 MiB, depending on the providers.
+The runner's concrete local job protocol is deliberately an implementation
+gate. The target topology is separate control-plane and runner services, but
+this document does not claim its protocol or deployment artifacts exist yet.
+M0 does not provide HA, OIDC, Kubernetes or remote runners.
+
+**Implementation status.** Ledger mode is enabled by the all-or-none
+`NODR_GITHUB_APP_ID`, `NODR_GITHUB_PRIVATE_KEY_FILE`,
+`NODR_GITHUB_WEBHOOK_SECRET` and `NODR_PUBLIC_URL` variables, and OpenTofu runs
+in-process (`ledger.LocalRunner`); the deployment artifacts ship a single
+control-plane service. `/healthz` and `/readyz` exist; `/readyz` checks the
+operations database, encrypted secrets and the repository store, but does not
+yet verify GitHub App reachability or public webhook ingress.
 
 ## 13.4 Upgrades
 
@@ -75,25 +84,18 @@ Kind storage versions follow the same process
 ([§3.11](03-resource-model.md#311-versioning-and-evolution)). Every release
 publishes a compatibility matrix.
 
-## 13.5 Backup and disaster recovery of nodr
+## 13.5 M0 backup and recovery
 
-| Data | Backup method | Target RPO |
-| ---- | ------------- | ---------- |
-| Workspace repositories | Git mirror, plus the nodr backup | 0 when mirrored |
-| Database | SQLite online backup, or `pg_dump` and point-in-time recovery | 24 hours by default, configurable down to 1 hour |
-| Engine state | Versioned in the artifact store, included in the backup | As the database |
-| Artifact store | Optional; run logs and plans | Best effort |
-| KEK | Recovery kit printed or stored in a password manager at setup | Required: without it, stored secrets cannot be recovered |
+| Data | Backup method | Authority |
+| ---- | ------------- | --------- |
+| GitHub desired-state repositories | GitHub plus server mirror backup | Desired state |
+| SQLite, encrypted secrets and artifacts | Consistent VPS data-directory backup | Operational state |
+| KEK and deployment secrets | Separate operator-managed recovery material | Required to decrypt server data |
 
-- nodr backs itself up with its own scheduler: an encrypted system backup to
-  PBS (with the Proxmox Backup client), S3 or a local path.
-- **Restore procedure:** install nodr, restore the database and repositories,
-  provide the KEK, start, run `nodr admin verify` (audit chain, repository
-  integrity, state versions), and re-enroll runners if needed.
-- **If engine state is lost anyway,** it can be recreated: intent contains the
-  identities of every resource (VM IDs, router names, cluster names), so nodr
-  can render `import` blocks for everything and verify the result with a
-  zero-diff plan.
+Recovery restores the data directory and deployment secrets, then reconnects
+the repository mirrors. Desired state is recovered from Git; SQLite recovery
+preserves operational history, delivery de-duplication and operation artifacts.
+No recovery procedure requires a user-facing CLI.
 
 ## 13.6 Observability
 
@@ -138,12 +140,8 @@ automated end-to-end tests.
 
 | Milestone | Scope | Exit criteria |
 | --------- | ----- | ------------- |
-| **M0 Foundations** | Git-backed workspaces, intent model and admission, OpenTofu engine and state service, VM lifecycle on a single Proxmox node, Simple Mode forms, Advanced Mode editor with sync for VMs, change sets and plans | S2 and S4 pass; lens laws hold for the VM lens |
-| **M1 Clusters and automation** | Multi-node clusters, version-aware HA, discovery and adoption, drift detection, scheduler with backup, update and snapshot policies, maintenance windows, notifications | S1, S3, S5 and S9 pass |
-| **M2 Networking** | OpenWrt plugin with connectivity-safe apply, IPAM, DHCP and DNS, firewall policy, Proxmox host networking and SDN, WireGuard | S6 passes; rollback chaos tests pass |
-| **M3 Containers** | Docker hosts, Compose projects with image locks and updates, K3s clusters, applications with direct and GitOps delivery, catalog | S7 passes |
-| **M4 Interoperability** | Ansible engine for VM provisioning, the handoff protocol, importers for Terraform and Ansible repositories, export, plugin SDK beta | S8 and S10 pass |
-| **M5 SME readiness (1.0)** | HA topology, OIDC, scoped RBAC and approvals, audit export, remote runners, Talos and Kubespray, hardening pack, external security review | All scenarios pass on the HA topology; security review findings closed |
+| **M0 Hosted foundation** | One VPS, browser bootstrap, GitHub App repository ledger, draft/CAS sync, SQLite operations, separate control-plane and runner services, Proxmox VM changes | Browser setup, repository connection, draft/plan/apply, and signed webhook sync work end to end. Shipped: all of these with an in-process runner; the separate runner service remains open. |
+| **Later milestones** | HA, OIDC, remote runners, Kubernetes and further infrastructure domains | Defined only after M0; none are exposed as partial M0 features. |
 
 ## 13.9 Risks and mitigations
 

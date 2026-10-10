@@ -13,11 +13,16 @@ formatting, and talks to the Kubernetes API.
 
 ## Decision
 
-The control plane and the runner are written in Go and ship as one binary
-with selectable roles. The web UI is a TypeScript and React single-page
-application embedded in the binary. SQLite in WAL mode is the default
-database. PostgreSQL is required for the HA topology, together with an
-external Git server as the authoritative repository.
+The target hosted product uses a Go control-plane service with an embedded
+TypeScript/React web UI and SQLite in WAL mode for one VPS instance. M0 deploys
+the control plane and OpenTofu runner as separate OCI images/services. The
+runner is isolated from control-plane secrets; its precise local job protocol
+is an implementation gate and is intentionally not specified here.
+
+This ADR is proposed, not an implementation-complete claim. HA/PostgreSQL,
+OIDC, Kubernetes, remote runners and user-facing terminal CLI administration
+are outside M0. Existing internal packages and CLI implementation may remain
+until browser/API replacements make their removal safe.
 
 ## Consequences
 

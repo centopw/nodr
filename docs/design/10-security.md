@@ -80,21 +80,26 @@ wrote, so they never hold long-lived credentials or the KEK.
 | Denial of service | API flooding | Rate limits, queue limits, per-workspace quotas |
 | Repudiation | "I did not make that change" | Hash-chained audit log, Git authorship |
 
-## 10.3 Identity and authentication
+## 10.3 M0 identity and integration secrets
 
-- **Local accounts:** Argon2id password hashes, TOTP and WebAuthn (passkeys),
-  lockout with exponential backoff.
-- **Single sign-on:** OpenID Connect with providers such as Authentik,
-  Keycloak, Authelia, Microsoft Entra ID or Google. Group claims map to role
-  bindings.
-- **API tokens:** scoped to a workspace and a set of permissions, with an
-  expiry date. They are shown once and stored as hashes. Service accounts own
-  tokens used by automation.
-- **Sessions:** `HttpOnly`, `Secure` and `SameSite=Strict` cookies, CSRF tokens
-  on state-changing requests, idle and absolute timeouts.
-- **Step-up authentication** for sensitive actions: revealing a secret,
-  deleting protected resources, using break-glass access.
-- **CLI:** OAuth device authorization flow.
+Initial setup is browser-only. Deployment supplies `BootstrapToken` and
+`PublicURL` from environment or mounted secret; at first start the server
+stores only a hash of the single-use bootstrap token. The browser submits it to
+`POST /api/v1/setup`, which atomically consumes it to create the first `admin`
+session. It gives no detail about an invalid, consumed, or already-initialized
+token.
+
+M0 has local `admin` and `operator` accounts with Argon2id password hashes and
+opaque, 24-hour `HttpOnly`, `Secure`, `SameSite=Strict` sessions. OIDC,
+external identity providers, API-token schemes beyond the implemented
+automation contract, and CLI device authorization are deferred.
+
+GitHub App private-key material, App ID, webhook secrets, installation tokens,
+the bootstrap token, KEK and Proxmox credentials are server configuration or
+envelope-encrypted server data. They are never committed to Git, returned to
+the browser, or logged. Installation tokens are short-lived and never stored.
+GitHub webhook bodies are signature-verified before parsing; delivery IDs are
+persisted for idempotency.
 
 ## 10.4 Authorization
 
