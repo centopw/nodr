@@ -18,6 +18,9 @@ var (
 	ErrPlanSHAMismatch = errors.New("operations: plan SHA mismatch")
 	// ErrPlanArtifactExists reports a second artifact for one plan operation.
 	ErrPlanArtifactExists = errors.New("operations: plan artifact already exists")
+	// ErrStaleDraft reports a draft advance whose expected draft SHA no longer
+	// matches the changeset's current draft SHA.
+	ErrStaleDraft = errors.New("operations: stale draft")
 )
 
 // ChangesetStatus is the lifecycle state of a Git-backed desired-state draft.

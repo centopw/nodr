@@ -363,3 +363,137 @@ func (s *Store) PlanArtifact(ctx context.Context, operationID string) (PlanArtif
 	out.JSON = append([]byte(nil), out.JSON...)
 	return out, nil
 }
+
+// AdvanceDraft sets DraftSHA=newSHA and Revision++ iff the changeset is open or
+// planned and DraftSHA==expectedSHA. A planned changeset returns to open because
+// its plan no longer matches the new draft. A closed changeset yields
+// ErrInvalidTransition; a mismatched expectedSHA yields ErrStaleDraft. Records
+// one "changeset.updated" event atomically.
+func (s *Store) AdvanceDraft(ctx context.Context, id, expectedSHA, newSHA string) (Changeset, error) {
+	s.mutateMu.Lock()
+	defer s.mutateMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Changeset{}, fmt.Errorf("operations: begin draft advance: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	row := tx.QueryRowContext(ctx, `SELECT id, workspace, base_sha, draft_sha, revision, status, created_at, updated_at FROM changesets WHERE id = ?`, id)
+	current, err := scanChangeset(row)
+	if err != nil {
+		return Changeset{}, err
+	}
+	if current.Status != ChangesetOpen && current.Status != ChangesetPlanned {
+		return Changeset{}, fmt.Errorf("changeset %s: %s: advance draft: %w", id, current.Status, ErrInvalidTransition)
+	}
+	if current.DraftSHA != expectedSHA {
+		return Changeset{}, fmt.Errorf("changeset %s: %w", id, ErrStaleDraft)
+	}
+	current.DraftSHA = newSHA
+	current.Revision++
+	current.Status = ChangesetOpen
+	current.UpdatedAt = time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `UPDATE changesets SET draft_sha = ?, revision = ?, status = ?, updated_at = ? WHERE id = ?`,
+		current.DraftSHA, current.Revision, current.Status, current.UpdatedAt.UnixNano(), id); err != nil {
+		return Changeset{}, fmt.Errorf("operations: advance draft: %w", err)
+	}
+	event, err := appendEvent(ctx, tx, current.ID, "", "changeset.updated")
+	if err != nil {
+		return Changeset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Changeset{}, fmt.Errorf("operations: commit draft advance: %w", err)
+	}
+	s.publish(event)
+	return current, nil
+}
+
+// Changesets lists a workspace's changesets, newest first.
+func (s *Store) Changesets(ctx context.Context, workspace string) ([]Changeset, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, workspace, base_sha, draft_sha, revision, status, created_at, updated_at FROM changesets WHERE workspace = ? ORDER BY created_at DESC, id DESC`, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("operations: list changesets: %w", err)
+	}
+	defer rows.Close()
+	var out []Changeset
+	for rows.Next() {
+		changeset, err := scanChangeset(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, changeset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("operations: iterate changesets: %w", err)
+	}
+	return out, nil
+}
+
+// FinishOperation moves a running operation to succeeded or failed and stores
+// result atomically with the status change. Any other transition yields
+// ErrInvalidTransition. Records one "operation.<to>" event in the same
+// transaction.
+func (s *Store) FinishOperation(ctx context.Context, id string, to OperationStatus, result string) (Operation, error) {
+	s.mutateMu.Lock()
+	defer s.mutateMu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Operation{}, fmt.Errorf("operations: begin operation finish: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	row := tx.QueryRowContext(ctx, `SELECT id, changeset_id, kind, status, plan_sha, result_summary, created_at, updated_at FROM operations WHERE id = ?`, id)
+	op, err := scanOperation(row)
+	if err != nil {
+		return Operation{}, err
+	}
+	if !canTransitionOperation(op.Status, to) || (to != OperationSucceeded && to != OperationFailed) {
+		return Operation{}, fmt.Errorf("operation %s: %s -> %s: %w", id, op.Status, to, ErrInvalidTransition)
+	}
+	op.Status, op.Result, op.UpdatedAt = to, result, time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `UPDATE operations SET status = ?, result_summary = ?, updated_at = ? WHERE id = ?`, op.Status, op.Result, op.UpdatedAt.UnixNano(), op.ID); err != nil {
+		return Operation{}, fmt.Errorf("operations: finish operation: %w", err)
+	}
+	event, err := appendEvent(ctx, tx, op.ChangesetID, op.ID, "operation."+string(to))
+	if err != nil {
+		return Operation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Operation{}, fmt.Errorf("operations: commit operation finish: %w", err)
+	}
+	s.publish(event)
+	return op, nil
+}
+
+// OperationByKey returns the operation claimed under the idempotency scope and
+// key, or an error wrapping ErrNotFound.
+func (s *Store) OperationByKey(ctx context.Context, scope, key string) (Operation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, changeset_id, kind, status, plan_sha, result_summary, created_at, updated_at FROM operations WHERE idempotency_scope = ? AND idempotency_key = ?`, scope, key)
+	return scanOperation(row)
+}
+
+// LatestPlan returns the newest succeeded plan operation of a changeset and its
+// artifact, or an error wrapping ErrNotFound when none exists.
+func (s *Store) LatestPlan(ctx context.Context, changesetID string) (Operation, PlanArtifact, error) {
+	var op Operation
+	var artifact PlanArtifact
+	var opCreatedAt, opUpdatedAt, artifactCreatedAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT o.id, o.changeset_id, o.kind, o.status, o.plan_sha, o.result_summary, o.created_at, o.updated_at,
+			a.operation_id, a.draft_sha, a.json, a.created_at
+		FROM operations AS o
+		JOIN plan_artifacts AS a ON a.operation_id = o.id
+		WHERE o.changeset_id = ? AND o.kind = 'plan' AND o.status = ?
+		ORDER BY o.created_at DESC, o.id DESC
+		LIMIT 1`, changesetID, OperationSucceeded).Scan(
+		&op.ID, &op.ChangesetID, &op.Kind, &op.Status, &op.PlanSHA, &op.Result, &opCreatedAt, &opUpdatedAt,
+		&artifact.OperationID, &artifact.DraftSHA, &artifact.JSON, &artifactCreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Operation{}, PlanArtifact{}, fmt.Errorf("changeset %s plan: %w", changesetID, ErrNotFound)
+	}
+	if err != nil {
+		return Operation{}, PlanArtifact{}, fmt.Errorf("operations: load latest plan: %w", err)
+	}
+	op.CreatedAt = time.Unix(0, opCreatedAt).UTC()
+	op.UpdatedAt = time.Unix(0, opUpdatedAt).UTC()
+	artifact.CreatedAt = time.Unix(0, artifactCreatedAt).UTC()
+	artifact.JSON = append([]byte(nil), artifact.JSON...)
+	return op, artifact, nil
+}
