@@ -19,6 +19,17 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - A durable generated key encryption key is written to `<data-dir>/kek` only
   when no KEK is configured through `--kek-file` or `NODR_KEK`. The server
   reuses that key on restart.
+- GitHub-backed ledger mode, opt-in. When `NODR_GITHUB_APP_ID`, `NODR_GITHUB_PRIVATE_KEY_FILE`, `NODR_GITHUB_WEBHOOK_SECRET`, and `NODR_PUBLIC_URL` are all set (all-or-none), `nodr server --data-dir` keeps desired state in GitHub repositories instead of the local workspace. Connect a repository that contains `nodr.yaml` from the dashboard; each edit creates a draft changeset pushed to `refs/heads/nodr/drafts/<id>`; plan runs OpenTofu on the server, and apply promotes the default branch. Saved plans are held in memory, so a restart requires planning again.
+- New ledger API under `/api/v1`: GitHub installations and repository connection, workspaces, resources, commands (`If-Match` and `Idempotency-Key` required), changesets with `:plan` and `:apply`, and operations. `GET /api/v1/events` is a Server-Sent Events stream of CloudEvents JSON (`nodr.operation.started|succeeded|failed`, `nodr.changeset.changed`) with `Last-Event-ID` replay.
+- `POST /api/v1/integrations/github/webhook` verifies `X-Hub-Signature-256` before parsing; a push to the default branch that changes generated code creates a sync changeset.
+- `GET /healthz` (liveness) and `GET /readyz` (operations database, encrypted secrets, and repository store; 503 lists the failed checks), served outside authentication.
+- Dashboard "Connect GitHub repository" panel and a changesets list with diffs and plan/apply actions.
+- Deployment templates (systemd, Compose, Helm) document the four GitHub variables; the App private key is always a mounted file, never inline.
+
+### Changed
+
+- The local-workspace command logic is shared by the legacy API handlers and the GitHub-backed ledger; legacy API behavior is unchanged.
+- In GitHub-backed ledger mode the legacy local-workspace `/api/v1/workspaces` routes return 404. The local bootstrap workspace keeps only authentication, secrets, and ledger state under `.nodr/`.
 
 ### Fixed
 - The release installer installs the latest stable release when no

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/centopw/nodr/internal/authn"
+	"github.com/centopw/nodr/internal/commands"
 	"github.com/centopw/nodr/internal/diag"
 	"github.com/centopw/nodr/internal/nrm"
 	"github.com/centopw/nodr/internal/nrm/v1alpha1"
@@ -548,41 +549,6 @@ func TestCreateVMRejectsUnknownCommand(t *testing.T) {
 	root := testWorkspace(t)
 	response := request(t, testHandler(t, root), http.MethodPost, "/api/v1/workspaces/homelab/commands", map[string]any{"command": "vm.destroy"})
 	checkProblem(t, response, http.StatusBadRequest, "Unknown command", "command", "vm.destroy")
-}
-
-func TestSizeCatalogAndSummaryWithoutAddress(t *testing.T) {
-	wantSizes := map[string]size{
-		"S": {CPU: 1, Memory: "2Gi", Disk: "20Gi"},
-		"M": {CPU: 2, Memory: "4Gi", Disk: "40Gi"},
-		"L": {CPU: 4, Memory: "8Gi", Disk: "80Gi"},
-	}
-	if !reflect.DeepEqual(sizes, wantSizes) {
-		t.Errorf("sizes = %#v, want %#v", sizes, wantSizes)
-	}
-
-	documents, diags := nrm.Parse("intent/compute/no-ip.yaml", []byte(`apiVersion: nodr/v1alpha1
-kind: VirtualMachine
-metadata: { name: no-ip }
-spec:
-  placement: { cluster: pve-main, assignedNode: pve1 }
-  identity: { vmid: 1013 }
-  resources: { cpu: { cores: 1 }, memory: { size: 2Gi } }
-  nics: [{ network: dmz, mac: BC:24:11:00:00:01, ipv4: { mode: dhcp } }]
-`))
-	if diags.HasErrors() || len(documents) != 1 {
-		t.Fatalf("parse VM: %v", diags.Err())
-	}
-	vm, err := v1alpha1.Decode[v1alpha1.VirtualMachineSpec](documents[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := createResponse(vm)
-	if response.Summary != "Creates no-ip with 1 vCPUs and 2 GiB memory on pve1." {
-		t.Errorf("summary = %q", response.Summary)
-	}
-	if response.Addresses == nil || response.MACs == nil {
-		t.Errorf("network arrays must not be nil: addresses=%v macs=%v", response.Addresses, response.MACs)
-	}
 }
 
 func TestCreateVMSerializesAdmission(t *testing.T) {
@@ -1182,7 +1148,7 @@ func TestVMLifecycleCommands(t *testing.T) {
 	if stopRes.Code != http.StatusOK {
 		t.Fatalf("vm.stop status = %d: %s", stopRes.Code, stopRes.Body.String())
 	}
-	var stopBody vmPowerStateResponse
+	var stopBody commands.VMPowerStateResult
 	decodeResponse(t, stopRes, &stopBody)
 	if stopBody.Name != "web-01" || stopBody.PowerState != "stopped" {
 		t.Errorf("stopBody = %#v, want name web-01, powerState stopped", stopBody)
@@ -1212,7 +1178,7 @@ func TestVMLifecycleCommands(t *testing.T) {
 	if startRes.Code != http.StatusOK {
 		t.Fatalf("vm.start status = %d: %s", startRes.Code, startRes.Body.String())
 	}
-	var startBody vmPowerStateResponse
+	var startBody commands.VMPowerStateResult
 	decodeResponse(t, startRes, &startBody)
 	if startBody.Name != "web-01" || startBody.PowerState != "running" {
 		t.Errorf("startBody = %#v, want name web-01, powerState running", startBody)
@@ -1234,7 +1200,7 @@ func TestVMLifecycleCommands(t *testing.T) {
 	if delRes.Code != http.StatusOK {
 		t.Fatalf("vm.delete status = %d: %s", delRes.Code, delRes.Body.String())
 	}
-	var delBody vmDeleteResponse
+	var delBody commands.VMDeleteResult
 	decodeResponse(t, delRes, &delBody)
 	if delBody.Name != "web-01" || !delBody.Deleted {
 		t.Errorf("delBody = %#v, want name web-01, deleted true", delBody)
@@ -1269,7 +1235,7 @@ func TestVMLifecycleRESTEndpoints(t *testing.T) {
 	if stopRes.Code != http.StatusOK {
 		t.Fatalf("REST :stop status = %d: %s", stopRes.Code, stopRes.Body.String())
 	}
-	var stopBody vmPowerStateResponse
+	var stopBody commands.VMPowerStateResult
 	decodeResponse(t, stopRes, &stopBody)
 	if stopBody.PowerState != "stopped" {
 		t.Errorf("expected stopped, got %q", stopBody.PowerState)
@@ -1280,7 +1246,7 @@ func TestVMLifecycleRESTEndpoints(t *testing.T) {
 	if startRes.Code != http.StatusOK {
 		t.Fatalf("REST :start status = %d: %s", startRes.Code, startRes.Body.String())
 	}
-	var startBody vmPowerStateResponse
+	var startBody commands.VMPowerStateResult
 	decodeResponse(t, startRes, &startBody)
 	if startBody.PowerState != "running" {
 		t.Errorf("expected running, got %q", startBody.PowerState)
@@ -1291,7 +1257,7 @@ func TestVMLifecycleRESTEndpoints(t *testing.T) {
 	if delRes.Code != http.StatusOK {
 		t.Fatalf("REST DELETE status = %d: %s", delRes.Code, delRes.Body.String())
 	}
-	var delBody vmDeleteResponse
+	var delBody commands.VMDeleteResult
 	decodeResponse(t, delRes, &delBody)
 	if !delBody.Deleted {
 		t.Errorf("expected deleted true, got false")
@@ -1316,7 +1282,7 @@ func TestVMLifecycleRESTDeleteSuffix(t *testing.T) {
 	if delRes.Code != http.StatusOK {
 		t.Fatalf("REST :delete status = %d: %s", delRes.Code, delRes.Body.String())
 	}
-	var delBody vmDeleteResponse
+	var delBody commands.VMDeleteResult
 	decodeResponse(t, delRes, &delBody)
 	if !delBody.Deleted {
 		t.Errorf("expected deleted true, got false")

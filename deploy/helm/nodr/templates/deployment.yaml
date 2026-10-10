@@ -67,6 +67,20 @@ spec:
                   name: {{ include "nodr.secretName" . }}
                   key: nodr-bootstrap-token
                   optional: true
+            {{- if .Values.github.appId }}
+            - name: NODR_GITHUB_APP_ID
+              value: {{ .Values.github.appId | quote }}
+            - name: NODR_GITHUB_PRIVATE_KEY_FILE
+              value: /etc/nodr/github/private-key.pem
+            - name: NODR_GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nodr.secretName" . }}
+                  key: nodr-github-webhook-secret
+                  optional: true
+            - name: NODR_PUBLIC_URL
+              value: {{ .Values.github.publicUrl | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -74,6 +88,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/nodr
+            {{- if .Values.github.appId }}
+            - name: github-app-key
+              mountPath: /etc/nodr/github
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -85,3 +104,11 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "nodr.fullname" . }}-data
           {{- end }}
+        {{- if .Values.github.appId }}
+        - name: github-app-key
+          secret:
+            secretName: {{ include "nodr.secretName" . }}
+            items:
+              - key: nodr-github-private-key
+                path: private-key.pem
+        {{- end }}

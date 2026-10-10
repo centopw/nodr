@@ -126,12 +126,14 @@ Generated OpenTofu remains ordinary code that runs without nodr.
 
 ## Status and roadmap
 
-nodr is pre-1.0 and its API can change. A hosted multi-node topology
-(control plane plus runner, GitHub App integration, webhooks) is designed in
-[ADR-0010](docs/adr/0010-web-only-vps-control-plane.md) and
-[the delivery roadmap](docs/design/13-operations-and-delivery.md#138-delivery-roadmap)
-but is **not shipped**; this README describes the single-binary workspace
-server only.
+nodr is pre-1.0 and its API can change. The single-binary workspace server is
+the default. An opt-in GitHub-backed ledger mode (GitHub App, webhooks,
+changesets, plan and apply) is enabled by a four-variable environment group;
+see the [production guide](docs/guides/production.md#13-github-backed-ledger-optional).
+A separate runner service, multi-instance operation, OIDC, and automated TLS are
+designed in [ADR-0010](docs/adr/0010-web-only-vps-control-plane.md) and
+[the delivery roadmap](docs/design/13-operations-and-delivery.md#138-delivery-roadmap),
+but are **not shipped**.
 
 ## Documentation
 

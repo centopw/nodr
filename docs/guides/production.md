@@ -187,6 +187,8 @@ journalctl -u nodr | grep "generated bootstrap token"
 The unit expects the binary at `/usr/local/bin/nodr` (installer default).
 TLS terminates at your reverse proxy (`NODR_ADDR` stays `127.0.0.1:8080`).
 
+Ledger mode (optional, section 13) also needs the App private key as a file the `nodr` user can read, for example `/etc/nodr/github-app.pem`, owned by `nodr` with mode `0400`.
+
 ## 8. Docker
 
 The image contains the nodr binary with the embedded dashboard and the `git`
@@ -235,6 +237,12 @@ docker compose -f deploy/compose/docker-compose.yml logs nodr
 
 The published port is `127.0.0.1:8080`; terminate TLS in a reverse proxy.
 
+To enable GitHub-backed ledger mode, uncomment the `secrets:` lines in
+`docker-compose.yml` (this mounts the App key at
+`/run/secrets/github-app-private-key`), set
+`NODR_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-app-private-key` and the other
+three `NODR_GITHUB_*`/`NODR_PUBLIC_URL` values in `nodr.env`, and see section 13.
+
 ## 10. Helm
 
 `deploy/helm/nodr` deploys one `Recreate` replica. Its data PVC is mounted at
@@ -250,7 +258,8 @@ helm install nodr deploy/helm/nodr \
 
 - The Secret may provide `nodr-kek`, plus the optional keys
   `nodr-bootstrap-workspace-name`, `nodr-bootstrap-admin-username`,
-  `nodr-bootstrap-admin-password`, and `nodr-bootstrap-token`. Missing keys are
+  `nodr-bootstrap-admin-password`, `nodr-bootstrap-token`,
+  `nodr-github-private-key`, and `nodr-github-webhook-secret`. Missing keys are
   unset. Supply all four bootstrap keys together or none.
 - With no secret values, read the generated token from the pod log
   (`kubectl logs deploy/nodr`) and finish setup in the browser through a port
@@ -259,6 +268,7 @@ helm install nodr deploy/helm/nodr \
   expose the dashboard.
 - The data PVC is `ReadWriteOnce` and the deployment uses `Recreate` — do not
   scale beyond one replica.
+- GitHub-backed ledger (optional): set `github.appId` and `github.publicUrl`, and provide the App private key (`nodr-github-private-key`) and webhook secret (`nodr-github-webhook-secret`) in `existingSecret`. The chart mounts the key at `/etc/nodr/github/private-key.pem`. See section 13.
 
 ## 11. Environment reference
 
@@ -269,6 +279,10 @@ helm install nodr deploy/helm/nodr \
 | `NODR_BOOTSTRAP_ADMIN_USERNAME` | all-or-none | First administrator username. |
 | `NODR_BOOTSTRAP_ADMIN_PASSWORD` | all-or-none | First administrator password. |
 | `NODR_BOOTSTRAP_TOKEN` | all-or-none; `-w` first start | Authorizes setup. With `-w`, it initializes the first administrator. Remove after bootstrap. |
+| `NODR_GITHUB_APP_ID` | all-or-none (ledger) | GitHub App ID. Enables GitHub-backed ledger mode with the three variables below. See section 13. |
+| `NODR_GITHUB_PRIVATE_KEY_FILE` | all-or-none (ledger) | Path to the App's PEM private key file. A mounted file, never the key content. |
+| `NODR_GITHUB_WEBHOOK_SECRET` | all-or-none (ledger) | Secret that signs webhook deliveries. |
+| `NODR_PUBLIC_URL` | all-or-none (ledger) | Public base URL of this server. The webhook URL is `<NODR_PUBLIC_URL>/api/v1/integrations/github/webhook`. |
 | `NODR_TOFU` | plan/apply | Path to the OpenTofu binary (falls back to `PATH`). |
 
 Flags: `--data-dir` (blank-host state directory), `-w`/`--workspace` (existing
@@ -287,9 +301,61 @@ and `--kek-file` (KEK file, takes precedence over `NODR_KEK`).
   your secret manager. For a generated `<data-dir>/kek`, back up that file
   with the data directory.
 
-## 13. Not shipped
+## 13. GitHub-backed ledger (optional)
+
+Ledger mode keeps desired state in GitHub repositories and runs plans and
+applies from the browser. It is opt-in and applies to `nodr server --data-dir`
+(blank-host and bootstrapped deployments); `nodr server -w` ignores these
+variables. Without the group, the server keeps the local-workspace behavior
+described in sections 2 to 4.
+
+### Variables
+
+Set all four together. If only some are set, the server exits with the missing
+names before it listens.
+
+| Variable | Meaning |
+| --- | --- |
+| `NODR_GITHUB_APP_ID` | Positive integer ID of the GitHub App. |
+| `NODR_GITHUB_PRIVATE_KEY_FILE` | Path to the App's PEM private key, read at startup. Mount it as a file (Compose secret, Helm secret volume, or a root-managed file readable by the `nodr` user). Never put the PEM content in an environment variable or a committed file. |
+| `NODR_GITHUB_WEBHOOK_SECRET` | Secret GitHub uses to sign webhook deliveries; the same value as in the App's webhook settings. |
+| `NODR_PUBLIC_URL` | Absolute `http(s)` base URL of this server as GitHub reaches it, for example `https://nodr.example.com`. |
+
+### Create the GitHub App
+
+The operator creates the App; nodr does not create it. Configure:
+
+1. Repository permissions: Contents read and write, Metadata read-only, Pull requests read and write, Commit statuses read and write.
+2. Subscribe to the `push` event.
+3. Webhook: active, URL `<NODR_PUBLIC_URL>/api/v1/integrations/github/webhook`, secret equal to `NODR_GITHUB_WEBHOOK_SECRET`, content type `application/json`.
+4. Generate a private key, and install the App on each repository you want to connect.
+
+### Use it in the browser
+
+1. Sign in to the dashboard.
+2. Under **Repositories**, choose **Connect GitHub repository**: select an installation, then a repository. The repository must contain a `nodr.yaml` with a valid workspace manifest; its `metadata.name` becomes the workspace name.
+3. Edit infrastructure as usual. Each command creates a changeset whose draft commit is pushed to `refs/heads/nodr/drafts/<id>` in the repository.
+4. Plan the changeset. The plan runs in the background and its status updates from the event stream.
+5. Apply the changeset. Apply fast-forwards the default branch to the planned draft, then runs OpenTofu. Destructive plans need explicit approval (`allowDestroy`).
+
+### Health endpoints
+
+`GET /healthz` reports liveness. `GET /readyz` checks the operations database,
+the encrypted secrets store, and the repository store; it returns 503 and names
+the failed checks. Both endpoints are served without authentication.
+
+### Ledger state and limits
+
+- Ledger state lives under `<workspace>/.nodr/ledger`. For a blank-host setup that is `<data-dir>/workspaces/<name>/.nodr/ledger`: the operations and metadata databases, the bare mirrors, and the plan files. Back it up with the data directory.
+- The runner runs in-process: OpenTofu runs on the same host as the server, found through `NODR_TOFU` or `PATH`. The separate runner service is not implemented.
+- Saved plans are held in memory and are lost on restart. Applying a plan made before a restart fails with `409 PLAN_CHANGED`; plan again.
+- Render-lock synchronization (`render.lock`) is not wired: nodr does not merge concurrent generated-code changes through it.
+- One GitHub App per instance: a deployment has one App ID, one private key, and one webhook secret.
+- Pull-request and commit-status checks are not implemented, although the App requests those permissions. Reconnecting or disconnecting a repository is not implemented.
+
+## 14. Not shipped
 
 The following are designed (see `docs/design/13-operations-and-delivery.md`)
-but not part of the current single-binary contract: hosted runner service,
-GitHub App-managed workspaces, `/readyz`, HA, OIDC, and automated TLS. This
-guide covers only the shipped `nodr server` behavior.
+but not shipped: a separate runner service, HA and multi-instance operation,
+OIDC, automated TLS, pull-request and commit-status checks, and GitHub App
+creation through the manifest flow.
