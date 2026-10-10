@@ -6,6 +6,9 @@ import {
   listResources,
   listWorkspaces,
   logout,
+  isLedgerWorkspace,
+  registerLedgerHead,
+  type LedgerWorkspace,
   type NamedResource,
   type ProxmoxCluster,
   type VirtualMachine,
@@ -13,12 +16,14 @@ import {
 } from "./api";
 import Banner from "./components/Banner";
 import Button from "./components/Button";
+import ChangesetsPanel from "./ChangesetsPanel";
 import ChangesPanel from "./ChangesPanel";
 import ClusterConnectWizard from "./ClusterConnectWizard";
 import ClusterList from "./ClusterList";
 import LoginForm from "./LoginForm";
 import NewVMForm from "./NewVMForm";
 import Overview from "./Overview";
+import RepositoriesPanel from "./RepositoriesPanel";
 import SetupForm from "./SetupForm";
 import VMList from "./VMList";
 import WorkspaceRail from "./WorkspaceRail";
@@ -50,6 +55,7 @@ export default function App() {
   const [data, setData] = useState<AppData | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [needsConnection, setNeedsConnection] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const connectClusterRef = useRef<HTMLDivElement>(null);
   const shouldFocusConnectCluster = useRef(false);
@@ -84,8 +90,12 @@ export default function App() {
     async function loadWorkspaces() {
       try {
         const items = await listWorkspaces();
-        if (!items[0]) throw new Error("No workspace is available.");
-        if (!cancelled) { setWorkspaces(items.map((item) => item.name)); setSelectedWorkspace((current) => current ?? items[0].name); }
+        if (!cancelled) {
+          items.forEach((item) => { if (item.headSha) registerLedgerHead(item.name, item.headSha); });
+          setWorkspaces(items.map((item) => item.name));
+          setNeedsConnection(items.length === 0);
+          setSelectedWorkspace((current) => current ?? items[0]?.name ?? null);
+        }
       } catch (error) { if (!cancelled) setLoadError(error instanceof Error ? error.message : "Unable to load nodr."); }
       finally { if (!cancelled) setLoading(false); }
     }
@@ -153,10 +163,22 @@ export default function App() {
     }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr."));
   }
 
+  async function handleRepositoryConnected(connected: LedgerWorkspace) {
+    const items = await listWorkspaces();
+    items.forEach((item) => { if (item.headSha) registerLedgerHead(item.name, item.headSha); });
+    setWorkspaces(items.map((item) => item.name));
+    setNeedsConnection(false);
+    setSuccess(`Connected ${connected.owner}/${connected.repository} as workspace ${connected.name}.`);
+    setSection("infrastructure");
+    setInfrastructureView("list");
+    setSelectedWorkspace(connected.name);
+  }
+
   if (loadError) return <main className="app-shell app-shell-centered"><Banner variant="error">{loadError}</Banner></main>;
   if (authPhase === "checking") return <main className="app-shell-centered"><p className="status" role="status">Loading nodr…</p></main>;
   if (authPhase === "needs-setup") return <SetupForm onSetupComplete={completeSetup} />;
   if (authPhase === "needs-login") return <LoginForm onLoggedIn={() => { void getSession().then((session) => { setUsername(session.username); setAuthPhase("authenticated"); }).catch((error: unknown) => setLoadError(error instanceof Error ? error.message : "Unable to load nodr.")); }} />;
+  if (needsConnection) return <main className={`app-shell${sidebarCollapsed ? " sidebar-is-collapsed" : ""}`}><aside className="app-sidebar"><div className="sidebar-identity"><p className="eyebrow">Infrastructure</p><p className="product-name">nodr</p></div></aside><div className="app-main"><header className="context-bar"><p className="breadcrumb" aria-label="Current location">Connect a repository</p><div className="context-bar-account">{username ? <span className="eyebrow">{username}</span> : null}<Button variant="secondary" size="small" onClick={() => { void handleLogout(); }}>Sign out</Button></div></header><div className="app-content"><RepositoriesPanel onConnected={handleRepositoryConnected} /></div></div></main>;
   if (loading || !selectedWorkspace || !data) return <main className="app-shell app-shell-centered"><p className="status" role="status">Loading workspace…</p></main>;
   const environments = Object.keys(data.manifest.environments);
 
@@ -171,9 +193,9 @@ export default function App() {
       <header className="context-bar"><label className="workspace-picker"><span>Workspace</span><select value={data.workspace} onChange={(event) => { setSuccess(null); setSection("infrastructure"); setInfrastructureView("list"); setSelectedWorkspace(event.target.value); }}>{workspaces.map((workspace) => <option key={workspace}>{workspace}</option>)}</select></label><p className="breadcrumb" aria-label="Current location">{data.workspace} <span aria-hidden="true">/</span> {section === "infrastructure" && infrastructureView === "new" ? "Infrastructure / New VM" : navItems.find((item) => item.id === section)?.label}</p><div className="context-bar-account">{username ? <span className="eyebrow">{username}</span> : null}<Button variant="secondary" size="small" onClick={() => { void handleLogout(); }}>Sign out</Button></div></header>
       <div className="app-content">
         {section === "overview" ? <Overview virtualMachines={data.virtualMachines} clusters={data.clusters} networks={data.networks} templates={data.templates} onCreateVM={() => showInfrastructure("new")} onConnectCluster={showConnectCluster} onPlanChanges={() => setSection("changes")} /> : null}
-        {section === "changes" ? <ChangesPanel workspace={data.workspace} onApplied={() => void refreshResources()} onBack={() => showInfrastructure()} /> : null}
+        {section === "changes" ? (isLedgerWorkspace(data.workspace) ? <ChangesetsPanel workspace={data.workspace} onApplied={() => void refreshResources()} onBack={() => showInfrastructure()} /> : <ChangesPanel workspace={data.workspace} onApplied={() => void refreshResources()} onBack={() => showInfrastructure()} />) : null}
         {section === "infrastructure" && infrastructureView === "new" ? <NewVMForm workspace={data.workspace} environments={environments} clusters={data.clusters} templates={data.templates} networks={data.networks} onCreated={async (summary) => { setInfrastructureView("list"); await refreshResources(); setSuccess(summary); }} onCancel={() => setInfrastructureView("list")} /> : null}
-        {section === "infrastructure" && infrastructureView === "list" ? <div className="infrastructure-layout"><div className="inventory-stack"><section aria-labelledby="vm-list-heading"><div className="section-heading"><div><p className="eyebrow">Infrastructure</p><h1 id="vm-list-heading">Virtual machines</h1></div></div>{success ? <Banner variant="success">{success}</Banner> : null}<VMList virtualMachines={data.virtualMachines} workspace={data.workspace} onRefresh={() => void refreshResources()} hasCluster={data.clusters.length > 0} onCreateVM={() => showInfrastructure("new")} onConnectCluster={showConnectCluster} /></section><ClusterList clusters={data.clusters} workspace={data.workspace} onRefresh={() => void refreshResources()} /><div className="connect-cluster-target" ref={connectClusterRef} tabIndex={-1}><ClusterConnectWizard workspace={data.workspace} hasClusters={data.clusters.length > 0} expandSignal={connectFocusToken} onConnected={async (summary) => { await refreshResources(); setSuccess(summary); }} /></div></div><WorkspaceRail virtualMachines={data.virtualMachines} clusters={data.clusters} networks={data.networks} templates={data.templates} onCreateVM={() => showInfrastructure("new")} onConnectCluster={showConnectCluster} onPlanChanges={() => setSection("changes")} /></div> : null}
+        {section === "infrastructure" && infrastructureView === "list" ? <div className="infrastructure-layout"><div className="inventory-stack"><section aria-labelledby="vm-list-heading"><div className="section-heading"><div><p className="eyebrow">Infrastructure</p><h1 id="vm-list-heading">Virtual machines</h1></div></div>{success ? <Banner variant="success">{success}</Banner> : null}<VMList virtualMachines={data.virtualMachines} workspace={data.workspace} onRefresh={() => void refreshResources()} hasCluster={data.clusters.length > 0} onCreateVM={() => showInfrastructure("new")} onConnectCluster={showConnectCluster} /></section><ClusterList clusters={data.clusters} workspace={data.workspace} onRefresh={() => void refreshResources()} /><div className="connect-cluster-target" ref={connectClusterRef} tabIndex={-1}><ClusterConnectWizard workspace={data.workspace} hasClusters={data.clusters.length > 0} expandSignal={connectFocusToken} onConnected={async (summary) => { await refreshResources(); setSuccess(summary); }} /></div><RepositoriesPanel collapsible onConnected={handleRepositoryConnected} /></div><WorkspaceRail virtualMachines={data.virtualMachines} clusters={data.clusters} networks={data.networks} templates={data.templates} onCreateVM={() => showInfrastructure("new")} onConnectCluster={showConnectCluster} onPlanChanges={() => setSection("changes")} /></div> : null}
       </div>
     </div>
   </main>;
