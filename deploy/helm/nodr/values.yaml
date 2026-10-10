@@ -31,6 +31,19 @@ resources:
   limits:
     memory: 256Mi
 
+# GitHub-backed ledger (opt-in; see docs/guides/production.md section 13).
+# Set appId and publicUrl here. The private key and the webhook secret must be
+# supplied through existingSecret (keys nodr-github-private-key and
+# nodr-github-webhook-secret). The NODR_GITHUB_* variables are all-or-none: a
+# partial group makes the server exit, and a missing private-key key stops the
+# pod from starting. Leave appId empty for the local workspace.
+github:
+  # Numeric GitHub App ID. Empty disables ledger mode.
+  appId: ""
+  # Public base URL, for example https://nodr.example.com. The webhook URL is
+  # <publicUrl>/api/v1/integrations/github/webhook.
+  publicUrl: ""
+
 # Secret material. Leave every value empty to finish setup in the browser;
 # the one-time token is printed to the pod log (kubectl logs). The chart never
 # supplies default credentials.
@@ -41,7 +54,9 @@ resources:
 secret:
   # Name of an existing Secret. Keys: nodr-kek, nodr-bootstrap-workspace-name,
   # nodr-bootstrap-admin-username, nodr-bootstrap-admin-password,
-  # nodr-bootstrap-token. Missing keys are treated as unset.
+  # nodr-bootstrap-token, nodr-github-private-key (PEM, mounted as a file when
+  # github.appId is set), nodr-github-webhook-secret. Missing keys are treated
+  # as unset.
   existingSecret: ""
   # Used only when existingSecret is empty. Base64-encoded 32-byte KEK; leave
   # empty to let nodr generate one under the data volume.

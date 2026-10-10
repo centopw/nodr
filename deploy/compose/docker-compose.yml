@@ -16,6 +16,17 @@ services:
     volumes:
       - nodr-data:/var/lib/nodr
     restart: unless-stopped
+    # Ledger mode (optional): mount the GitHub App private key as a secret file.
+    # Uncomment together with the top-level secrets block below, and set
+    # NODR_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-app-private-key in nodr.env.
+    # secrets:
+    #   - github-app-private-key
 
 volumes:
   nodr-data:
+
+# Ledger mode (optional): keep the GitHub App private key out of Git. The file
+# path is relative to this file.
+# secrets:
+#   github-app-private-key:
+#     file: ./secrets/github-app-private-key.pem
