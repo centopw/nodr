@@ -41,9 +41,13 @@ func (g GitRunner) Add(ctx context.Context, root string) error {
 	return g.run(ctx, root, "add", "nodr.yaml", "intent")
 }
 
-// Commit records the initial workspace commit.
+// Commit records the initial workspace commit. It supplies a fixed nodr author
+// and committer so the commit never depends on a Git identity configured on the
+// host, which a freshly provisioned server does not have.
 func (g GitRunner) Commit(ctx context.Context, root string) error {
-	return g.run(ctx, root, "commit", "-m", "chore: initialize nodr workspace")
+	return g.run(ctx, root,
+		"-c", "user.name=nodr", "-c", "user.email=nodr@localhost", "-c", "commit.gpgsign=false",
+		"commit", "-m", "chore: initialize nodr workspace")
 }
 
 // CreateWorkspace creates, validates, and commits a newly derived workspace target.
@@ -61,34 +65,34 @@ func CreateWorkspace(ctx context.Context, dataDir, name string) (root string, ro
 			_ = os.RemoveAll(target)
 		}
 	}
-	fail := func(err error) (string, func(), error) { rollback(); return "", nil, err }
+	fail := func(err error) error { rollback(); return err }
 	if err := os.Mkdir(filepath.Join(target, workspace.IntentDir), 0700); err != nil {
-		return fail(fmt.Errorf("bootstrap: create intent directory: %w", err))
+		return "", nil, fail(fmt.Errorf("bootstrap: create intent directory: %w", err))
 	}
 	manifest := fmt.Sprintf("apiVersion: nodr/v1alpha1\nkind: Workspace\nmetadata:\n  name: %s\nspec: {}\n", name)
 	if err := os.WriteFile(filepath.Join(target, workspace.ManifestFile), []byte(manifest), 0600); err != nil {
-		return fail(fmt.Errorf("bootstrap: write manifest: %w", err))
+		return "", nil, fail(fmt.Errorf("bootstrap: write manifest: %w", err))
 	}
 	loaded, diags := workspace.Load(target)
 	if diags.HasErrors() {
-		return fail(fmt.Errorf("bootstrap: load manifest: %w", diags.Err()))
+		return "", nil, fail(fmt.Errorf("bootstrap: load manifest: %w", diags.Err()))
 	}
 	registry, err := v1alpha1.NewRegistry()
 	if err != nil {
-		return fail(fmt.Errorf("bootstrap: create NRM registry: %w", err))
+		return "", nil, fail(fmt.Errorf("bootstrap: create NRM registry: %w", err))
 	}
 	if diags := loaded.Validate(registry); diags.HasErrors() {
-		return fail(fmt.Errorf("bootstrap: validate manifest: %w", diags.Err()))
+		return "", nil, fail(fmt.Errorf("bootstrap: validate manifest: %w", diags.Err()))
 	}
 	git := GitRunner{}
 	if err := git.Init(ctx, target); err != nil {
-		return fail(err)
+		return "", nil, fail(err)
 	}
 	if err := git.Add(ctx, target); err != nil {
-		return fail(err)
+		return "", nil, fail(err)
 	}
 	if err := git.Commit(ctx, target); err != nil {
-		return fail(err)
+		return "", nil, fail(err)
 	}
 	return target, rollback, nil
 }
