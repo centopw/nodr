@@ -47,8 +47,7 @@ tar -xzf "nodr_${VERSION#v}_linux_amd64.tar.gz" nodr
 **Docker:**
 
 ```sh
-docker run -p 127.0.0.1:8080:8080 -v /srv/nodr/workspace:/workspace \
-    -e NODR_KEK="$(openssl rand -base64 32)" \
+docker run -p 127.0.0.1:8080:8080 -v nodr-data:/var/lib/nodr \
     ghcr.io/centopw/nodr:latest
 ```
 
@@ -59,24 +58,32 @@ docker run -p 127.0.0.1:8080:8080 -v /srv/nodr/workspace:/workspace \
 
 ## First run
 
-nodr serves an existing workspace; it never creates one. Point it at a Git
-repository holding `nodr.yaml`, intent under `intent/`, and generated
-OpenTofu under `terraform/` — the [homelab example](examples/homelab/README.md)
-is a complete reference layout.
+On a blank host, `nodr server` creates the workspace and the first
+administrator itself, so no workspace has to exist beforehand. Start it with
+no arguments:
 
-1. Export a durable key-encryption key and, for the very first start, a
-   one-time bootstrap token:
+```sh
+nodr server
+```
 
-   ```console
-   $ export NODR_KEK="$(openssl rand -base64 32)"
-   $ export NODR_BOOTSTRAP_TOKEN=one-time-setup-token
-   $ nodr server -w /srv/nodr/workspace
-   ```
-
-2. Open `http://127.0.0.1:8080`, complete setup with the bootstrap token,
-   and create the administrator. Remove `NODR_BOOTSTRAP_TOKEN` afterwards.
+1. The server prints a one-time bootstrap token to stdout, with a warning.
+   Treat it as a secret: anyone holding it can create the administrator.
+2. Open `http://127.0.0.1:8080`, then enter that token, a workspace name, an
+   administrator username, and a password. nodr creates a local Git workspace
+   under its data directory with an initial commit, creates the administrator,
+   and signs you in.
 3. Use **Infrastructure** to create VMs or connect clusters, and **Changes**
    to plan and apply.
+
+`--data-dir` defaults to `$XDG_STATE_HOME/nodr`, or `$HOME/.local/state/nodr`
+when `XDG_STATE_HOME` is unset. It holds bootstrap state, the new workspace,
+and the generated key-encryption key at `<data-dir>/kek` when no key is
+configured. Back it up, and keep the key with it.
+
+To serve an existing workspace instead, run `nodr server -w <dir>`. That keeps
+the legacy behavior: the workspace must already validate, and the first
+administrator requires `NODR_BOOTSTRAP_TOKEN`. Unattended setup of a blank
+host is described in the [production guide](docs/guides/production.md).
 
 For advanced local workspace inspection and development commands, see the
 [local development guide](docs/guides/local-development.md#advanced-local-tooling).

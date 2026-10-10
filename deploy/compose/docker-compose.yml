@@ -1,18 +1,21 @@
 # Deploy the nodr web control plane with Docker Compose.
 #
-# The container requires an existing, valid nodr workspace mounted at
-# /workspace. nodr never creates a workspace; provision one from Git as
-# documented in docs/guides/production.md.
-#
-# Copy nodr.env.example to nodr.env (next to this file) and fill it in.
+# nodr creates its own Git workspace on first start. The named volume
+# nodr-data holds bootstrap state, the workspace, and the generated KEK when
+# no KEK is configured. Copy nodr.env.example to nodr.env (next to this file)
+# and fill it in, or leave it empty for browser setup.
 services:
   nodr:
     image: ghcr.io/centopw/nodr:latest
+    command: ["server", "--data-dir", "/var/lib/nodr", "--addr", "0.0.0.0:8080"]
     ports:
       # Loopback only: put a TLS-terminating reverse proxy in front.
       - "127.0.0.1:8080:8080"
     env_file:
       - nodr.env
     volumes:
-      - ${NODR_WORKSPACE:?set NODR_WORKSPACE in nodr.env}:/workspace
+      - nodr-data:/var/lib/nodr
     restart: unless-stopped
+
+volumes:
+  nodr-data:

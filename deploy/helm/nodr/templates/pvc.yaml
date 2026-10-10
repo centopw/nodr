@@ -1,8 +1,8 @@
-{{- if .Values.workspace.create }}
+{{- if .Values.data.create }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "nodr.fullname" . }}-workspace
+  name: {{ include "nodr.fullname" . }}-data
   labels:
     {{- include "nodr.labels" . | nindent 4 }}
 spec:
@@ -10,8 +10,8 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: {{ .Values.workspace.size }}
-  {{- with .Values.workspace.storageClass }}
+      storage: {{ .Values.data.size }}
+  {{- with .Values.data.storageClass }}
   storageClassName: {{ . | quote }}
   {{- end }}
 {{- end }}

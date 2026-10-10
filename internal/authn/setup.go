@@ -1,30 +1,44 @@
 package authn
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 )
 
+type setupService interface {
+	SetupWorkspace(context.Context, string, string, string, string) (sessionToken, csrfToken string, expiresAt time.Time, err error)
+}
+
+type setupFieldError interface{ SetupField() string }
+
 type setupRequest struct {
-	Token    string `json:"token"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Token         string `json:"token"`
+	WorkspaceName string `json:"workspaceName"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
 }
 
 // SetupHandler handles POST /setup: it consumes the one-time bootstrap
 // token and creates the admin account. Both a wrong token and an
 // already-consumed bootstrap are reported as the same 403, with no
 // distinguishing detail (design doc §"Bootstrap contract").
-func SetupHandler(store *Store) http.Handler {
+func SetupHandler(store setupService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req setupRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeProblem(w, http.StatusBadRequest, "Invalid request", "request body must be JSON with token, username and password")
 			return
 		}
-		sessionToken, csrfToken, expiresAt, err := store.Setup(r.Context(), req.Token, req.Username, req.Password)
+		sessionToken, csrfToken, expiresAt, err := store.SetupWorkspace(r.Context(), req.Token, req.WorkspaceName, req.Username, req.Password)
 		if err != nil {
+			var validation setupFieldError
+			if errors.As(err, &validation) {
+				writeFieldProblem(w, validation.SetupField())
+				return
+			}
 			if errors.Is(err, ErrSetupUnavailable) || errors.Is(err, ErrInvalidCredentials) {
 				writeProblem(w, http.StatusForbidden, "Forbidden", "setup is not available")
 				return
@@ -44,6 +58,26 @@ func SetupHandler(store *Store) http.Handler {
 		writeJSON(w, struct {
 			CSRFToken string `json:"csrfToken"`
 		}{CSRFToken: csrfToken})
+	})
+}
+
+func writeFieldProblem(w http.ResponseWriter, field string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(struct {
+		Type          string `json:"type"`
+		Title         string `json:"title"`
+		Status        int    `json:"status"`
+		InvalidParams []struct {
+			Name   string `json:"name"`
+			Reason string `json:"reason"`
+		} `json:"invalid-params"`
+	}{
+		Type: "about:blank", Title: "Invalid request", Status: http.StatusBadRequest,
+		InvalidParams: []struct {
+			Name   string `json:"name"`
+			Reason string `json:"reason"`
+		}{{Name: field, Reason: "invalid value"}},
 	})
 }
 

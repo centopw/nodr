@@ -342,6 +342,12 @@ func (s *Store) Setup(ctx context.Context, token, username, password string) (se
 	return sessionToken, csrfToken, expiresAt, nil
 }
 
+// SetupWorkspace adapts Store to SetupHandler's setup service. The workspace
+// name is intentionally ignored for legacy single-workspace setup.
+func (s *Store) SetupWorkspace(ctx context.Context, token, _ string, username, password string) (sessionToken, csrfToken string, expiresAt time.Time, err error) {
+	return s.Setup(ctx, token, username, password)
+}
+
 // Logout deletes the session for token.
 func (s *Store) Logout(ctx context.Context, token string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM session WHERE token = ?`, token)

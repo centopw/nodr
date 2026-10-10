@@ -6,12 +6,13 @@ import FieldErrorList from "./components/FieldErrorList";
 import type { FieldError } from "./api";
 
 interface SetupFormProps {
-  onSetupComplete: () => void;
+  onSetupComplete: (workspaceName: string) => void;
 }
 
 export default function SetupForm({ onSetupComplete }: SetupFormProps) {
   const [values, setValues] = useState<SetupParams>({
     token: "",
+    workspaceName: "",
     username: "",
     password: "",
   });
@@ -38,7 +39,7 @@ export default function SetupForm({ onSetupComplete }: SetupFormProps) {
     setSubmitting(true);
     try {
       await setup(values);
-      onSetupComplete();
+      onSetupComplete(values.workspaceName);
     } catch (error) {
       if (error instanceof ProblemError) {
         setProblem(error.problem);
@@ -61,7 +62,8 @@ export default function SetupForm({ onSetupComplete }: SetupFormProps) {
         <div className="section-heading">
           <div>
             <p className="eyebrow">nodr</p>
-            <h1 id="setup-heading">Set up your administrator account</h1>
+            <h1 id="setup-heading">Create your workspace and administrator</h1>
+            <p>Setup creates a local, Git-backed workspace on this host and the first administrator account that manages it.</p>
           </div>
         </div>
         <form onSubmit={handleSubmit} autoComplete="off">
@@ -71,6 +73,22 @@ export default function SetupForm({ onSetupComplete }: SetupFormProps) {
             </Banner>
           ) : null}
           <div className="form-grid">
+            <div className="field">
+              <label htmlFor="setup-workspace-name">Workspace name</label>
+              <input
+                id="setup-workspace-name"
+                name="workspaceName"
+                type="text"
+                value={values.workspaceName}
+                onChange={(event) => updateField("workspaceName", event.target.value)}
+                aria-describedby={
+                  errorsFor("workspaceName").length ? "setup-workspace-name-errors" : undefined
+                }
+                aria-invalid={errorsFor("workspaceName").length > 0}
+                required
+              />
+              <FieldErrorList errors={errorsFor("workspaceName")} id="setup-workspace-name-errors" />
+            </div>
             <div className="field">
               <label htmlFor="setup-token">Bootstrap token</label>
               <input

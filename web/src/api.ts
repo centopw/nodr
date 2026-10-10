@@ -147,6 +147,7 @@ export interface SetupStatus {
 
 export interface SetupParams {
   token: string;
+  workspaceName: string;
   username: string;
   password: string;
 }
@@ -165,15 +166,47 @@ export function getSetupStatus(): Promise<SetupStatus> {
   return fetchJSON(`${API_BASE}/setup/status`);
 }
 
+interface SetupProblemBody {
+  type?: string;
+  title?: string;
+  status?: number;
+  detail?: string;
+  "invalid-params"?: Array<{ name: string; reason: string }>;
+}
+
+// The setup handler reports field errors as RFC 7807 invalid-params; map each
+// onto the errors[].path shape the rest of the API uses.
+function setupProblem(body: SetupProblemBody): ProblemDetails {
+  const errors: FieldError[] = (body["invalid-params"] ?? []).map((param) => ({
+    path: `params.${param.name}`,
+    message: param.reason,
+  }));
+  return {
+    type: body.type ?? "about:blank",
+    title: body.title ?? "Setup failed",
+    status: body.status ?? 0,
+    detail: body.detail ?? "Check the highlighted fields and try again.",
+    errors: errors.length > 0 ? errors : undefined,
+  };
+}
+
 export async function setup(params: SetupParams): Promise<void> {
-  const response = await fetchJSON<{ csrfToken: string }>(
-    `${API_BASE}/setup`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    },
-  );
+  let response: { csrfToken: string };
+  try {
+    response = await fetchJSON<{ csrfToken: string }>(
+      `${API_BASE}/setup`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      },
+    );
+  } catch (error) {
+    if (error instanceof ProblemError) {
+      throw new ProblemError(setupProblem(error.problem as unknown as SetupProblemBody));
+    }
+    throw error;
+  }
   setCSRFToken(response.csrfToken);
 }
 

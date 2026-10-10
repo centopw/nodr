@@ -7,6 +7,19 @@ and versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+### Added
+- Blank-host `nodr server` now supports secured browser setup and unattended
+  environment bootstrap. Without `--workspace`, it creates an initial local Git
+  workspace under `--data-dir` (default `$XDG_STATE_HOME/nodr` or
+  `$HOME/.local/state/nodr`) and creates the first administrator. Browser setup
+  uses a generated one-time token printed at startup, or
+  `NODR_BOOTSTRAP_TOKEN`. Unattended setup uses the all-or-none group
+  `NODR_BOOTSTRAP_WORKSPACE_NAME`, `NODR_BOOTSTRAP_ADMIN_USERNAME`,
+  `NODR_BOOTSTRAP_ADMIN_PASSWORD`, and `NODR_BOOTSTRAP_TOKEN`.
+- A durable generated key encryption key is written to `<data-dir>/kek` only
+  when no KEK is configured through `--kek-file` or `NODR_KEK`. The server
+  reuses that key on restart.
+
 ### Fixed
 - The release installer installs the latest stable release when no
   `--version` is given, no longer fails with `ARCHIVE: parameter not set`
